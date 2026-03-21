@@ -34,7 +34,9 @@ from .base import WorkspaceToolBase
 class _PaintSelectTree(QtWidgets.QTreeWidget):
     """
     QTreeWidget subclass that lets the user click-and-drag across items
-    to 'paint' a selection, similar to dragging over cells in a spreadsheet.
+    to select a contiguous range.  The range is defined by the anchor
+    (where the mouse was pressed) and the current item under the cursor.
+    Dragging back shrinks the selection — standard list-box behaviour.
     """
 
     paintSelectFinished = QtCore.Signal()
@@ -42,8 +44,8 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._painting = False
-        self._paint_modifier = None  # None = replace, Ctrl = toggle
-        self._painted_items = set()
+        self._anchor_item = None
+        self._pre_drag_selection = set()  # items selected before this drag
         self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.setDragEnabled(False)
         self.setAcceptDrops(False)
@@ -57,14 +59,14 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         if event.button() == QtCore.Qt.LeftButton:
             item = self.itemAt(event.pos())
             if item and not item.data(0, QtCore.Qt.UserRole + 1):
-                # Clicked on a non-group item — start painting
                 self._painting = True
-                self._painted_items.clear()
+                self._anchor_item = item
                 ctrl = event.modifiers() & QtCore.Qt.ControlModifier
-                self._paint_modifier = "ctrl" if ctrl else None
-                if self._paint_modifier != "ctrl":
-                    self.clearSelection()
-                self._toggle_paint(item)
+                if ctrl:
+                    self._pre_drag_selection = set(self.selectedItems())
+                else:
+                    self._pre_drag_selection = set()
+                self._select_range(item)
                 return
         super().mousePressEvent(event)
 
@@ -72,25 +74,55 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         if self._painting:
             item = self.itemAt(event.pos())
             if item and not item.data(0, QtCore.Qt.UserRole + 1):
-                self._toggle_paint(item)
+                self._select_range(item)
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         if self._painting and event.button() == QtCore.Qt.LeftButton:
             self._painting = False
-            self._painted_items.clear()
+            self._anchor_item = None
+            self._pre_drag_selection = set()
             self.paintSelectFinished.emit()
             return
         super().mouseReleaseEvent(event)
 
     # -- helpers -----------------------------------------------------------
 
-    def _toggle_paint(self, item):
-        if item in self._painted_items:
+    def _leaf_items(self):
+        """Return all visible non-group items in visual order."""
+        items = []
+        iterator = QtWidgets.QTreeWidgetItemIterator(
+            self, QtWidgets.QTreeWidgetItemIterator.NoChildren
+        )
+        while iterator.value():
+            item = iterator.value()
+            if not item.data(0, QtCore.Qt.UserRole + 1):
+                items.append(item)
+            iterator += 1
+        return items
+
+    def _select_range(self, end_item):
+        """Select the contiguous range from anchor to *end_item*."""
+        leaves = self._leaf_items()
+        try:
+            anchor_idx = leaves.index(self._anchor_item)
+            end_idx = leaves.index(end_item)
+        except ValueError:
             return
-        self._painted_items.add(item)
-        item.setSelected(True)
+
+        lo, hi = sorted((anchor_idx, end_idx))
+        range_set = set(leaves[lo:hi + 1])
+
+        self.blockSignals(True)
+        for item in leaves:
+            should_select = (
+                item in range_set or item in self._pre_drag_selection
+            )
+            item.setSelected(should_select)
+        self.blockSignals(False)
+
+        self.itemSelectionChanged.emit()
 
 
 # ---------------------------------------------------------------------------
