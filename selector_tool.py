@@ -45,6 +45,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         super().__init__(parent)
         self._painting = False
         self._anchor_item = None
+        self._drag_deselecting = False  # True when Ctrl+click on selected item
         self._pre_drag_selection = set()  # items selected before this drag
         self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.setDragEnabled(False)
@@ -64,9 +65,11 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                 ctrl = event.modifiers() & QtCore.Qt.ControlModifier
                 if ctrl:
                     self._pre_drag_selection = set(self.selectedItems())
+                    self._drag_deselecting = item.isSelected()
                 else:
                     self._pre_drag_selection = set()
-                self._select_range(item)
+                    self._drag_deselecting = False
+                self._apply_range(item)
                 return
         super().mousePressEvent(event)
 
@@ -74,7 +77,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         if self._painting:
             item = self.itemAt(event.pos())
             if item and not item.data(0, QtCore.Qt.UserRole + 1):
-                self._select_range(item)
+                self._apply_range(item)
             return
         super().mouseMoveEvent(event)
 
@@ -82,6 +85,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         if self._painting and event.button() == QtCore.Qt.LeftButton:
             self._painting = False
             self._anchor_item = None
+            self._drag_deselecting = False
             self._pre_drag_selection = set()
             self.paintSelectFinished.emit()
             return
@@ -102,8 +106,8 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
             iterator += 1
         return items
 
-    def _select_range(self, end_item):
-        """Select the contiguous range from anchor to *end_item*."""
+    def _apply_range(self, end_item):
+        """Select (or deselect) the contiguous range from anchor to *end_item*."""
         leaves = self._leaf_items()
         try:
             anchor_idx = leaves.index(self._anchor_item)
@@ -115,11 +119,18 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         range_set = set(leaves[lo:hi + 1])
 
         self.blockSignals(True)
-        for item in leaves:
-            should_select = (
-                item in range_set or item in self._pre_drag_selection
-            )
-            item.setSelected(should_select)
+        if self._drag_deselecting:
+            for item in leaves:
+                should_select = (
+                    item in self._pre_drag_selection and item not in range_set
+                )
+                item.setSelected(should_select)
+        else:
+            for item in leaves:
+                should_select = (
+                    item in range_set or item in self._pre_drag_selection
+                )
+                item.setSelected(should_select)
         self.blockSignals(False)
 
         self.itemSelectionChanged.emit()
