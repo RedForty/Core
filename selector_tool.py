@@ -148,7 +148,12 @@ class SelectorTool(WorkspaceToolBase):
             QTreeWidget::item { padding: 1px 0px; }
         """)
 
-        # initial populate & hooks
+        # Defer scene queries and scriptJobs until the workspaceControl
+        # is fully initialised (avoids errors during __init__).
+        cmds.evalDeferred(self._deferred_init)
+
+    def _deferred_init(self):
+        """Called via evalDeferred so the workspaceControl is fully ready."""
         self._refresh()
         self._install_script_jobs()
 
