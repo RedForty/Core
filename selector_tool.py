@@ -60,15 +60,30 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         if event.button() == QtCore.Qt.LeftButton:
             item = self.itemAt(event.pos())
             if item and not item.data(0, QtCore.Qt.UserRole + 1):
-                self._painting = True
-                self._anchor_item = item
-                ctrl = event.modifiers() & QtCore.Qt.ControlModifier
-                if ctrl:
-                    self._pre_drag_selection = set(self.selectedItems())
-                    self._drag_deselecting = item.isSelected()
-                else:
+                mods = event.modifiers()
+                shift = mods & QtCore.Qt.ShiftModifier
+                ctrl = mods & QtCore.Qt.ControlModifier
+
+                if shift and self._anchor_item:
+                    # Shift+click: select range from anchor, no drag
                     self._pre_drag_selection = set()
                     self._drag_deselecting = False
+                    self._painting = False
+                    self._apply_range(item)
+                    return
+
+                self._painting = True
+                if not ctrl:
+                    # Plain click — set new anchor
+                    self._anchor_item = item
+                    self._pre_drag_selection = set()
+                    self._drag_deselecting = False
+                else:
+                    # Ctrl+click — keep anchor, add/remove mode
+                    if not self._anchor_item:
+                        self._anchor_item = item
+                    self._pre_drag_selection = set(self.selectedItems())
+                    self._drag_deselecting = item.isSelected()
                 self._apply_range(item)
                 return
         super().mousePressEvent(event)
