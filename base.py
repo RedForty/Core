@@ -297,6 +297,14 @@ class WorkspaceToolBase(QtWidgets.QWidget):
             return
 
         parent = wrapInstance(int(ptr), QtWidgets.QWidget)
+
+        # Guard against double-population.  Maya may execute the uiScript
+        # immediately when the workspaceControl is created, *and* _create()
+        # also calls this method directly.  If the parent already has a
+        # laid-out child widget we can safely skip.
+        if parent.layout() and parent.layout().count() > 0:
+            return
+
         widget = cls(parent=parent)
 
         layout = QtWidgets.QVBoxLayout(parent)
