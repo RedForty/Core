@@ -37,6 +37,46 @@ log.setLevel(logging.DEBUG)
 
 
 # ---------------------------------------------------------------------------
+#   Delegate that tints group headers based on child selection state
+# ---------------------------------------------------------------------------
+
+class _GroupTintDelegate(QtWidgets.QStyledItemDelegate):
+    """
+    Draws a coloured background behind group-header rows to indicate
+    how many of their children are selected:
+      - no children selected  → default (no tint)
+      - some children selected → dim blue
+      - all children selected  → brighter blue
+    """
+
+    COLOR_SOME = QtGui.QColor(70, 120, 180, 90)   # dim blue
+    COLOR_ALL  = QtGui.QColor(90, 150, 220, 140)   # brighter blue
+
+    def paint(self, painter, option, index):
+        # Only tint group headers (UserRole+1 == True)
+        item = self.parent().itemFromIndex(index)
+        if item and item.data(0, QtCore.Qt.UserRole + 1):
+            child_count = item.childCount()
+            if child_count:
+                selected = sum(
+                    1 for i in range(child_count) if item.child(i).isSelected()
+                )
+                if selected == child_count:
+                    color = self.COLOR_ALL
+                elif selected > 0:
+                    color = self.COLOR_SOME
+                else:
+                    color = None
+
+                if color:
+                    painter.save()
+                    painter.fillRect(option.rect, color)
+                    painter.restore()
+
+        super().paint(painter, option, index)
+
+
+# ---------------------------------------------------------------------------
 #   Custom tree widget with paint-select (click-drag) support
 # ---------------------------------------------------------------------------
 
@@ -64,6 +104,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         self.setRootIsDecorated(True)
         self.setHeaderHidden(True)
         self.setIndentation(16)
+        self.setItemDelegate(_GroupTintDelegate(self))
 
     # -- events ------------------------------------------------------------
 
@@ -80,6 +121,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                 self.blockSignals(False)
                 if self._sync_callback:
                     self._sync_callback([])
+                self._update_group_tints()
                 return
 
             # --- group header: select/toggle children ---
@@ -134,6 +176,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                 self.blockSignals(False)
                 if self._sync_callback:
                     self._sync_callback(selected_keys)
+                self._update_group_tints()
                 return
 
             # --- leaf item ---
@@ -200,6 +243,10 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         super().mouseReleaseEvent(event)
 
     # -- helpers -----------------------------------------------------------
+
+    def _update_group_tints(self):
+        """Schedule a viewport repaint so group header tints refresh."""
+        self.viewport().update()
 
     @staticmethod
     def _item_key(item):
@@ -279,6 +326,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
 
         if self._sync_callback:
             self._sync_callback(selected_keys)
+        self._update_group_tints()
 
 
 # ---------------------------------------------------------------------------
@@ -758,6 +806,7 @@ class SelectorTool(WorkspaceToolBase):
                 iterator += 1
 
             self.tree.blockSignals(False)
+            self.tree._update_group_tints()
         finally:
             self._syncing = False
 
