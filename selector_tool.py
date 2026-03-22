@@ -84,6 +84,20 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
 
             # --- group header: select/toggle children ---
             if item.data(0, QtCore.Qt.UserRole + 1):
+                # Let clicks on the expand/collapse arrow pass through to Qt
+                item_rect = self.visualItemRect(item)
+                arrow_width = self.indentation()
+                indent_level = 0
+                parent = item.parent()
+                while parent:
+                    indent_level += 1
+                    parent = parent.parent()
+                arrow_x = indent_level * arrow_width
+                if event.pos().x() < arrow_x + arrow_width:
+                    self._handled = False
+                    super().mousePressEvent(event)
+                    return
+
                 self._handled = True
                 self._painting = False
                 mods = event.modifiers()
