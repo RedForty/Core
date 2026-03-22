@@ -174,6 +174,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         range_set = set(leaves[lo:hi + 1])
 
         self.blockSignals(True)
+        self.clearSelection()  # clear stale group-header selections too
         if self._drag_deselecting:
             for item in leaves:
                 should_select = (
