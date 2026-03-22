@@ -17,9 +17,7 @@ Or via the module-level helper:
     my_tools.selector_tool.show()
 """
 
-import json
 import logging
-import os
 
 import maya.cmds as cmds
 
@@ -355,7 +353,7 @@ class SelectorTool(WorkspaceToolBase):
         options_menu = menu_bar.addMenu("Options")
         self._show_second_action = options_menu.addAction("Show Second List")
         self._show_second_action.setCheckable(True)
-        self._show_second_action.setChecked(self._pref_show_second())
+        self._show_second_action.setChecked(self._pref_bool("showSecondList"))
         self._show_second_action.toggled.connect(self._toggle_second_list)
         self.main_layout.setMenuBar(menu_bar)
 
@@ -363,7 +361,7 @@ class SelectorTool(WorkspaceToolBase):
         self.filter_edit = QtWidgets.QLineEdit()
         self.filter_edit.setPlaceholderText("Filter types  (e.g. joint | transform)")
         self.filter_edit.setClearButtonEnabled(True)
-        self.filter_edit.setText(self._pref_filter_text("filter1"))
+        self.filter_edit.setText(self._pref_string("filter1"))
         self.filter_edit.returnPressed.connect(self._refresh)
         self.main_layout.addWidget(self.filter_edit)
 
@@ -373,7 +371,7 @@ class SelectorTool(WorkspaceToolBase):
         self._filter_timer.setInterval(400)
         self._filter_timer.timeout.connect(self._refresh)
         self.filter_edit.textChanged.connect(self._restart_filter_timer)
-        self.filter_edit.textChanged.connect(self._save_filter1)
+        self.filter_edit.textChanged.connect(lambda t: self._set_pref("filter1", t))
 
         # --- tree ---
         self.tree = _PaintSelectTree()
@@ -385,13 +383,13 @@ class SelectorTool(WorkspaceToolBase):
         self.main_layout.addWidget(self.tree)
 
         # --- second filter + tree (hidden by default) ---
-        show_second = self._pref_show_second()
+        show_second = self._pref_bool("showSecondList")
         self.filter_edit2 = QtWidgets.QLineEdit()
         self.filter_edit2.setPlaceholderText("Filter types  (e.g. joint | transform)")
         self.filter_edit2.setClearButtonEnabled(True)
-        self.filter_edit2.setText(self._pref_filter_text("filter2"))
+        self.filter_edit2.setText(self._pref_string("filter2"))
         self.filter_edit2.setVisible(show_second)
-        self.filter_edit2.textChanged.connect(self._save_filter2)
+        self.filter_edit2.textChanged.connect(lambda t: self._set_pref("filter2", t))
         self.main_layout.addWidget(self.filter_edit2)
 
         self.tree2 = _PaintSelectTree()
@@ -423,33 +421,8 @@ class SelectorTool(WorkspaceToolBase):
 
     # ── Options / preferences ────────────────────────────────────────────
 
-    def _pref_show_second(self):
-        key = self._opt("showSecondList")
-        if cmds.optionVar(exists=key):
-            return bool(cmds.optionVar(q=key))
-        return False
-
-    def _pref_filter_text(self, key):
-        opt = self._opt(key)
-        if cmds.optionVar(exists=opt):
-            val = cmds.optionVar(q=opt)
-            log.debug("_pref_filter_text: %s = %r", opt, val)
-            return val if isinstance(val, str) else ""
-        return ""
-
-    def _save_filter1(self, text):
-        self._save_filter_text("filter1", text)
-
-    def _save_filter2(self, text):
-        self._save_filter_text("filter2", text)
-
-    def _save_filter_text(self, key, text):
-        opt = self._opt(key)
-        log.debug("_save_filter_text: %s = %r", opt, text)
-        cmds.optionVar(sv=(opt, text))
-
     def _toggle_second_list(self, checked):
-        cmds.optionVar(iv=(self._opt("showSecondList"), int(checked)))
+        self._set_pref("showSecondList", checked)
         self.filter_edit2.setVisible(checked)
         self.tree2.setVisible(checked)
 
@@ -467,55 +440,15 @@ class SelectorTool(WorkspaceToolBase):
 
     # ── Custom group persistence (JSON config) ────────────────────────────
 
-    _GROUPS_FILENAME = "selectorTool_groups.json"
-
-    @classmethod
-    def _groups_path(cls):
-        """Return the path to the JSON groups config file."""
-        maya_app_dir = cmds.internalVar(userAppDir=True).rstrip("/")
-        return os.path.join(maya_app_dir, cls._GROUPS_FILENAME)
-
-    @classmethod
-    def _scene_key(cls):
-        """Return a stable key for the current scene file."""
-        scene = cmds.file(q=True, sceneName=True) or ""
-        return scene or "__untitled__"
-
-    def _load_all_groups(self):
-        """Load the entire groups JSON file. Returns dict."""
-        path = self._groups_path()
-        if not os.path.isfile(path):
-            return {}
-        try:
-            with open(path, "r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            log.warning("Failed to read groups config: %s", path)
-            return {}
-
-    def _save_all_groups(self, data):
-        """Write the entire groups JSON file."""
-        path = self._groups_path()
-        try:
-            with open(path, "w") as f:
-                json.dump(data, f, indent=2)
-        except IOError:
-            log.error("Failed to write groups config: %s", path)
+    _CONFIG_FILENAME = "selectorTool_config.json"
 
     def _load_custom_groups(self):
         """Return custom groups for the current scene. {name: [long_names]}"""
-        data = self._load_all_groups()
-        return data.get(self._scene_key(), {})
+        return self._load_scene_config()
 
     def _save_custom_groups(self, groups):
         """Save custom groups for the current scene."""
-        data = self._load_all_groups()
-        key = self._scene_key()
-        if groups:
-            data[key] = groups
-        else:
-            data.pop(key, None)
-        self._save_all_groups(data)
+        self._save_scene_config(groups)
 
     # ── Tree-item factories ─────────────────────────────────────────────
 
