@@ -64,6 +64,11 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                 shift = mods & QtCore.Qt.ShiftModifier
                 ctrl = mods & QtCore.Qt.ControlModifier
 
+                print("[DEBUG] shift={} ctrl={} anchor={} item={}".format(
+                    bool(shift), bool(ctrl),
+                    self._anchor_item.text(0) if self._anchor_item else None,
+                    item.text(0)))
+
                 if shift and self._anchor_item:
                     # Shift+click: select range from anchor, no drag
                     self._pre_drag_selection = set()
@@ -123,11 +128,17 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
     def _apply_range(self, end_item):
         """Select (or deselect) the contiguous range from anchor to *end_item*."""
         leaves = self._leaf_items()
+        print("[DEBUG] _apply_range: anchor={} end={} leaf_count={}".format(
+            self._anchor_item.text(0) if self._anchor_item else None,
+            end_item.text(0), len(leaves)))
         try:
             anchor_idx = leaves.index(self._anchor_item)
             end_idx = leaves.index(end_item)
-        except ValueError:
+        except ValueError as e:
+            print("[DEBUG] _apply_range ValueError: {}".format(e))
             return
+        print("[DEBUG] _apply_range: anchor_idx={} end_idx={}".format(
+            anchor_idx, end_idx))
 
         lo, hi = sorted((anchor_idx, end_idx))
         range_set = set(leaves[lo:hi + 1])
