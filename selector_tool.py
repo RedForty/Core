@@ -448,17 +448,24 @@ class SelectorTool(WorkspaceToolBase):
         matches = [t for t in all_types if lower in t.lower()]
         return matches
 
-    def _parsed_types(self):
-        """Return (include, exclude) lists of Maya node types from the filter.
+    _SHAPE_TOKEN = "shape"
 
-        Tokens prefixed with ``-`` are exclusions.
-        Example: ``transform | -cam | -joint``
+    def _parsed_types(self):
+        """Return (include, exclude, show_shapes) from the filter.
+
+        Tokens prefixed with ``-`` are exclusions.  The special token
+        ``shape`` is not treated as a node type — instead it sets
+        *show_shapes* to ``True`` so the caller can include shape nodes
+        alongside their transforms.
+
+        Example: ``nurbs | shape | -cam``
         """
         raw = self.filter_edit.text().strip()
         if not raw:
-            return [], []
+            return [], [], False
         include = []
         exclude = []
+        show_shapes = False
         for t in raw.split("|"):
             t = t.strip()
             if not t:
@@ -467,9 +474,11 @@ class SelectorTool(WorkspaceToolBase):
                 name = t[1:].strip()
                 if name:
                     exclude.extend(self._resolve_types(name))
+            elif t.lower() == self._SHAPE_TOKEN:
+                show_shapes = True
             else:
                 include.extend(self._resolve_types(t))
-        return include, exclude
+        return include, exclude, show_shapes
 
     # ── Custom group persistence (JSON config) ────────────────────────────
 
@@ -519,25 +528,44 @@ class SelectorTool(WorkspaceToolBase):
         try:
             self.tree.clear()
 
-            include, exclude = self._parsed_types()
+            include, exclude, show_shapes = self._parsed_types()
             if not include:
                 self.status_label.setText("Enter a type to filter")
                 return
 
             # Gather all matching nodes
-            matching = set()
+            raw_matches = set()
             for t in include:
                 try:
-                    matching.update(cmds.ls(type=t, long=True) or [])
+                    raw_matches.update(cmds.ls(type=t, long=True) or [])
                 except RuntimeError:
                     pass  # invalid type name — skip
 
             # Subtract excluded types
             for t in exclude:
                 try:
-                    matching -= set(cmds.ls(type=t, long=True) or [])
+                    raw_matches -= set(cmds.ls(type=t, long=True) or [])
                 except RuntimeError:
                     pass
+
+            # Resolve shape nodes to their transform parents.
+            # If 'shape' token is present, keep shape nodes too.
+            matching = set()
+            for node in raw_matches:
+                node_type = cmds.nodeType(node)
+                is_shape = False
+                try:
+                    is_shape = cmds.objectType(node, isAType="shape")
+                except RuntimeError:
+                    pass
+                if is_shape:
+                    parent = cmds.listRelatives(node, parent=True, fullPath=True)
+                    if parent:
+                        matching.add(parent[0])
+                    if show_shapes:
+                        matching.add(node)
+                else:
+                    matching.add(node)
 
             if not matching:
                 self.status_label.setText("0 items")
