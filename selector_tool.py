@@ -524,9 +524,14 @@ class SelectorTool(WorkspaceToolBase):
             return
         self._filter_timer.stop()
 
+        # Snapshot Maya selection before clearing so we can restore highlights.
+        prev_sel = set(cmds.ls(selection=True, long=True) or [])
+
         self._syncing = True
         try:
+            self.tree.blockSignals(True)
             self.tree.clear()
+            self.tree.blockSignals(False)
 
             include, exclude, show_shapes = self._parsed_types()
             if not include:
@@ -636,11 +641,21 @@ class SelectorTool(WorkspaceToolBase):
                 ug_item.setExpanded(True)
 
             self.status_label.setText(f"{item_count} items")
+
+            # Restore selection highlight from snapshot taken before clear.
+            if prev_sel:
+                self.tree.blockSignals(True)
+                iterator = QtWidgets.QTreeWidgetItemIterator(self.tree)
+                while iterator.value():
+                    item = iterator.value()
+                    long_name = item.data(0, QtCore.Qt.UserRole)
+                    if long_name and long_name in prev_sel:
+                        item.setSelected(True)
+                    iterator += 1
+                self.tree.blockSignals(False)
+                self.tree._update_group_tints()
         finally:
             self._syncing = False
-
-        # Restore selection highlight from Maya's current selection
-        self._sync_from_viewport()
 
     # ── Right-click context menu ─────────────────────────────────────────
 
