@@ -359,7 +359,7 @@ class SelectorTool(WorkspaceToolBase):
 
         # --- type filter ---
         self.filter_edit = QtWidgets.QLineEdit()
-        self.filter_edit.setPlaceholderText("Filter types  (e.g. joint | transform)")
+        self.filter_edit.setPlaceholderText("Filter types  (e.g. transform | -camera)")
         self.filter_edit.setClearButtonEnabled(True)
         self.filter_edit.setText(self._pref_string("filter1"))
         self.filter_edit.returnPressed.connect(self._refresh)
@@ -432,11 +432,27 @@ class SelectorTool(WorkspaceToolBase):
         self._filter_timer.start()
 
     def _parsed_types(self):
-        """Return a list of Maya node types from the filter field."""
+        """Return (include, exclude) lists of Maya node types from the filter.
+
+        Tokens prefixed with ``-`` are exclusions.
+        Example: ``transform | -camera | -joint``
+        """
         raw = self.filter_edit.text().strip()
         if not raw:
-            return []
-        return [t.strip() for t in raw.split("|") if t.strip()]
+            return [], []
+        include = []
+        exclude = []
+        for t in raw.split("|"):
+            t = t.strip()
+            if not t:
+                continue
+            if t.startswith("-"):
+                name = t[1:].strip()
+                if name:
+                    exclude.append(name)
+            else:
+                include.append(t)
+        return include, exclude
 
     # ── Custom group persistence (JSON config) ────────────────────────────
 
@@ -486,18 +502,25 @@ class SelectorTool(WorkspaceToolBase):
         try:
             self.tree.clear()
 
-            types = self._parsed_types()
-            if not types:
+            include, exclude = self._parsed_types()
+            if not include:
                 self.status_label.setText("Enter a type to filter")
                 return
 
             # Gather all matching nodes
             matching = set()
-            for t in types:
+            for t in include:
                 try:
                     matching.update(cmds.ls(type=t, long=True) or [])
                 except RuntimeError:
                     pass  # invalid type name — skip
+
+            # Subtract excluded types
+            for t in exclude:
+                try:
+                    matching -= set(cmds.ls(type=t, long=True) or [])
+                except RuntimeError:
+                    pass
 
             if not matching:
                 self.status_label.setText("0 items")
