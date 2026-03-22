@@ -17,7 +17,10 @@ Or via the module-level helper:
     my_tools.selector_tool.show()
 """
 
+import json
 import logging
+import os
+
 import maya.cmds as cmds
 
 try:
@@ -293,6 +296,8 @@ class SelectorTool(WorkspaceToolBase):
         self.tree._sync_callback = self._apply_maya_selection
         self.tree.itemExpanded.connect(self._on_group_expanded)
         self.tree.itemCollapsed.connect(self._on_group_collapsed)
+        self.tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._show_context_menu)
         self.main_layout.addWidget(self.tree)
 
         # --- second filter + tree (hidden by default) ---
@@ -376,6 +381,82 @@ class SelectorTool(WorkspaceToolBase):
             return []
         return [t.strip() for t in raw.split("|") if t.strip()]
 
+    # ── Custom group persistence (JSON config) ────────────────────────────
+
+    _GROUPS_FILENAME = "selectorTool_groups.json"
+
+    @classmethod
+    def _groups_path(cls):
+        """Return the path to the JSON groups config file."""
+        maya_app_dir = cmds.internalVar(userAppDir=True).rstrip("/")
+        return os.path.join(maya_app_dir, cls._GROUPS_FILENAME)
+
+    @classmethod
+    def _scene_key(cls):
+        """Return a stable key for the current scene file."""
+        scene = cmds.file(q=True, sceneName=True) or ""
+        return scene or "__untitled__"
+
+    def _load_all_groups(self):
+        """Load the entire groups JSON file. Returns dict."""
+        path = self._groups_path()
+        if not os.path.isfile(path):
+            return {}
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            log.warning("Failed to read groups config: %s", path)
+            return {}
+
+    def _save_all_groups(self, data):
+        """Write the entire groups JSON file."""
+        path = self._groups_path()
+        try:
+            with open(path, "w") as f:
+                json.dump(data, f, indent=2)
+        except IOError:
+            log.error("Failed to write groups config: %s", path)
+
+    def _load_custom_groups(self):
+        """Return custom groups for the current scene. {name: [long_names]}"""
+        data = self._load_all_groups()
+        return data.get(self._scene_key(), {})
+
+    def _save_custom_groups(self, groups):
+        """Save custom groups for the current scene."""
+        data = self._load_all_groups()
+        key = self._scene_key()
+        if groups:
+            data[key] = groups
+        else:
+            data.pop(key, None)
+        self._save_all_groups(data)
+
+    # ── Tree-item factories ─────────────────────────────────────────────
+
+    _CUSTOM_GROUP_ROLE = QtCore.Qt.UserRole + 2  # True for custom groups
+
+    @staticmethod
+    def _make_leaf_item(long_name):
+        """Create a leaf QTreeWidgetItem for a scene node."""
+        short = long_name.rsplit("|", 1)[-1]
+        item = QtWidgets.QTreeWidgetItem([short])
+        item.setData(0, QtCore.Qt.UserRole, long_name)
+        item.setData(0, QtCore.Qt.UserRole + 1, False)
+        return item
+
+    @classmethod
+    def _make_group_header(cls, label, is_custom=False):
+        """Create a bold group-header QTreeWidgetItem."""
+        item = QtWidgets.QTreeWidgetItem([label])
+        item.setData(0, QtCore.Qt.UserRole + 1, True)  # is_group flag
+        item.setData(0, cls._CUSTOM_GROUP_ROLE, is_custom)
+        font = item.font(0)
+        font.setBold(True)
+        item.setFont(0, font)
+        return item
+
     # ── Scene query & tree build ──────────────────────────────────────────
 
     def _refresh(self):
@@ -405,9 +486,28 @@ class SelectorTool(WorkspaceToolBase):
                 self.status_label.setText("0 items")
                 return
 
-            # Gather selection sets and their members
+            # ---- Custom groups (take priority) ----
+            custom_groups = self._load_custom_groups()
+            assigned = set()
+
+            item_count = 0
+
+            for grp_name in sorted(custom_groups):
+                nodes = [n for n in custom_groups[grp_name] if n in matching]
+                if not nodes:
+                    continue
+                nodes.sort(key=lambda n: n.rsplit("|", 1)[-1])
+                assigned.update(nodes)
+                group_item = self._make_group_header(grp_name, is_custom=True)
+                self.tree.addTopLevelItem(group_item)
+                for long_name in nodes:
+                    group_item.addChild(self._make_leaf_item(long_name))
+                    item_count += 1
+                group_item.setExpanded(True)
+
+            # ---- Selection-set groups (for remaining items) ----
+            remaining = matching - assigned
             all_sets = cmds.ls(type="objectSet") or []
-            # Exclude Maya's default sets
             default_sets = {
                 "defaultLightSet", "defaultObjectSet",
                 "initialParticleSE", "initialShadingGroup",
@@ -418,63 +518,36 @@ class SelectorTool(WorkspaceToolBase):
                 and not cmds.objectType(s, isAType="shadingEngine")
             ]
 
-            grouped = {}    # set_name -> [long_name, ...]
-            assigned = set()
-
             for s in sorted(user_sets):
                 members = cmds.sets(s, q=True, nodesOnly=True) or []
                 long_members = []
                 for m in members:
-                    long_names = cmds.ls(m, long=True) or []
-                    long_members.extend(long_names)
-                group_nodes = [n for n in long_members if n in matching]
-                if group_nodes:
-                    grouped[s] = sorted(group_nodes, key=lambda n: n.rsplit("|", 1)[-1])
-                    assigned.update(group_nodes)
+                    long_members.extend(cmds.ls(m, long=True) or [])
+                group_nodes = sorted(
+                    [n for n in long_members if n in remaining],
+                    key=lambda n: n.rsplit("|", 1)[-1],
+                )
+                if not group_nodes:
+                    continue
+                assigned.update(group_nodes)
+                group_item = self._make_group_header(s, is_custom=False)
+                self.tree.addTopLevelItem(group_item)
+                for long_name in group_nodes:
+                    group_item.addChild(self._make_leaf_item(long_name))
+                    item_count += 1
+                group_item.setExpanded(True)
 
+            # ---- Ungrouped section ----
             ungrouped = sorted(
                 matching - assigned,
                 key=lambda n: n.rsplit("|", 1)[-1],
             )
-
-            item_count = 0
-
-            # Build grouped sections
-            for set_name, nodes in sorted(grouped.items()):
-                group_item = QtWidgets.QTreeWidgetItem([set_name])
-                group_item.setData(0, QtCore.Qt.UserRole + 1, True)  # is_group flag
-                font = group_item.font(0)
-                font.setBold(True)
-                group_item.setFont(0, font)
-                self.tree.addTopLevelItem(group_item)
-
-                for long_name in nodes:
-                    short = long_name.rsplit("|", 1)[-1]
-                    child = QtWidgets.QTreeWidgetItem([short])
-                    child.setData(0, QtCore.Qt.UserRole, long_name)  # store long name
-                    child.setData(0, QtCore.Qt.UserRole + 1, False)
-                    group_item.addChild(child)
-                    item_count += 1
-
-                group_item.setExpanded(True)
-
-            # Build ungrouped section
             if ungrouped:
-                ug_item = QtWidgets.QTreeWidgetItem([self.UNGROUPED_LABEL])
-                ug_item.setData(0, QtCore.Qt.UserRole + 1, True)
-                font = ug_item.font(0)
-                font.setBold(True)
-                ug_item.setFont(0, font)
+                ug_item = self._make_group_header(self.UNGROUPED_LABEL, is_custom=False)
                 self.tree.addTopLevelItem(ug_item)
-
                 for long_name in ungrouped:
-                    short = long_name.rsplit("|", 1)[-1]
-                    child = QtWidgets.QTreeWidgetItem([short])
-                    child.setData(0, QtCore.Qt.UserRole, long_name)
-                    child.setData(0, QtCore.Qt.UserRole + 1, False)
-                    ug_item.addChild(child)
+                    ug_item.addChild(self._make_leaf_item(long_name))
                     item_count += 1
-
                 ug_item.setExpanded(True)
 
             self.status_label.setText(f"{item_count} items")
@@ -483,6 +556,123 @@ class SelectorTool(WorkspaceToolBase):
             self._sync_from_viewport()
         finally:
             self._syncing = False
+
+    # ── Right-click context menu ─────────────────────────────────────────
+
+    def _show_context_menu(self, pos):
+        """Build and show a context menu for custom group management."""
+        item = self.tree.itemAt(pos)
+        menu = QtWidgets.QMenu(self.tree)
+
+        selected_leaves = [
+            it for it in self.tree.selectedItems()
+            if not it.data(0, QtCore.Qt.UserRole + 1)
+        ]
+        custom_groups = self._load_custom_groups()
+
+        # --- Actions on a custom group header ---
+        if item and item.data(0, QtCore.Qt.UserRole + 1) and item.data(0, self._CUSTOM_GROUP_ROLE):
+            grp_name = item.text(0)
+            menu.addAction("Rename Group\u2026", lambda: self._rename_group(grp_name))
+            menu.addAction("Delete Group", lambda: self._delete_group(grp_name))
+            menu.addSeparator()
+
+        # --- New Group from selection ---
+        if selected_leaves:
+            menu.addAction("New Group\u2026", lambda: self._new_group_from_selection(selected_leaves))
+
+            # --- Add to existing group submenu ---
+            if custom_groups:
+                sub = menu.addMenu("Add to Group")
+                for name in sorted(custom_groups):
+                    sub.addAction(name, lambda n=name: self._add_to_group(n, selected_leaves))
+
+            # --- Remove from Group (if any selected items are in a custom group) ---
+            in_custom = any(
+                it.parent() and it.parent().data(0, self._CUSTOM_GROUP_ROLE)
+                for it in selected_leaves
+            )
+            if in_custom:
+                menu.addAction("Remove from Group", lambda: self._remove_from_group(selected_leaves))
+
+        if menu.isEmpty():
+            return
+        menu.exec_(self.tree.viewport().mapToGlobal(pos))
+
+    def _new_group_from_selection(self, selected_leaves):
+        """Prompt for a name and create a new custom group with selected items."""
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "New Group", "Group name:"
+        )
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        groups = self._load_custom_groups()
+        if name in groups:
+            QtWidgets.QMessageBox.warning(
+                self, "Duplicate", f"A group named \"{name}\" already exists."
+            )
+            return
+        long_names = []
+        for it in selected_leaves:
+            ln = it.data(0, QtCore.Qt.UserRole)
+            if ln:
+                long_names.append(ln)
+        groups[name] = long_names
+        self._save_custom_groups(groups)
+        self._refresh()
+
+    def _add_to_group(self, group_name, selected_leaves):
+        """Add selected items to an existing custom group."""
+        groups = self._load_custom_groups()
+        existing = set(groups.get(group_name, []))
+        for it in selected_leaves:
+            ln = it.data(0, QtCore.Qt.UserRole)
+            if ln:
+                existing.add(ln)
+        groups[group_name] = list(existing)
+        self._save_custom_groups(groups)
+        self._refresh()
+
+    def _remove_from_group(self, selected_leaves):
+        """Remove selected items from their custom groups."""
+        groups = self._load_custom_groups()
+        to_remove = set()
+        for it in selected_leaves:
+            ln = it.data(0, QtCore.Qt.UserRole)
+            if ln:
+                to_remove.add(ln)
+        for name in list(groups):
+            groups[name] = [n for n in groups[name] if n not in to_remove]
+            if not groups[name]:
+                del groups[name]
+        self._save_custom_groups(groups)
+        self._refresh()
+
+    def _rename_group(self, old_name):
+        """Rename a custom group."""
+        new_name, ok = QtWidgets.QInputDialog.getText(
+            self, "Rename Group", "New name:", text=old_name
+        )
+        if not ok or not new_name.strip() or new_name.strip() == old_name:
+            return
+        new_name = new_name.strip()
+        groups = self._load_custom_groups()
+        if new_name in groups:
+            QtWidgets.QMessageBox.warning(
+                self, "Duplicate", f"A group named \"{new_name}\" already exists."
+            )
+            return
+        groups[new_name] = groups.pop(old_name, [])
+        self._save_custom_groups(groups)
+        self._refresh()
+
+    def _delete_group(self, group_name):
+        """Delete a custom group (items move back to Ungrouped)."""
+        groups = self._load_custom_groups()
+        groups.pop(group_name, None)
+        self._save_custom_groups(groups)
+        self._refresh()
 
     # ── Group click → select all children ─────────────────────────────────
 
