@@ -431,11 +431,28 @@ class SelectorTool(WorkspaceToolBase):
     def _restart_filter_timer(self):
         self._filter_timer.start()
 
+    @staticmethod
+    def _resolve_types(token):
+        """Resolve a user token to a list of Maya node types.
+
+        Exact matches are returned directly.  If no exact match exists,
+        all registered node types whose name contains *token* (case-
+        insensitive) are returned — e.g. ``cam`` → ``[camera, ...]``.
+        """
+        all_types = cmds.allNodeTypes() or []
+        # Exact match (case-sensitive, as Maya types are)
+        if token in all_types:
+            return [token]
+        # Substring / prefix fallback (case-insensitive)
+        lower = token.lower()
+        matches = [t for t in all_types if lower in t.lower()]
+        return matches
+
     def _parsed_types(self):
         """Return (include, exclude) lists of Maya node types from the filter.
 
         Tokens prefixed with ``-`` are exclusions.
-        Example: ``transform | -camera | -joint``
+        Example: ``transform | -cam | -joint``
         """
         raw = self.filter_edit.text().strip()
         if not raw:
@@ -449,9 +466,9 @@ class SelectorTool(WorkspaceToolBase):
             if t.startswith("-"):
                 name = t[1:].strip()
                 if name:
-                    exclude.append(name)
+                    exclude.extend(self._resolve_types(name))
             else:
-                include.append(t)
+                include.extend(self._resolve_types(t))
         return include, exclude
 
     # ── Custom group persistence (JSON config) ────────────────────────────
