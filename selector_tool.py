@@ -261,6 +261,15 @@ class SelectorTool(WorkspaceToolBase):
     # ── UI ────────────────────────────────────────────────────────────────
 
     def build_ui(self):
+        # --- menu bar ---
+        menu_bar = QtWidgets.QMenuBar(self)
+        options_menu = menu_bar.addMenu("Options")
+        self._show_second_action = options_menu.addAction("Show Second List")
+        self._show_second_action.setCheckable(True)
+        self._show_second_action.setChecked(self._pref_show_second())
+        self._show_second_action.toggled.connect(self._toggle_second_list)
+        self.main_layout.setMenuBar(menu_bar)
+
         # --- type filter ---
         self.filter_edit = QtWidgets.QLineEdit()
         self.filter_edit.setPlaceholderText("Filter types  (e.g. joint | transform)")
@@ -282,6 +291,11 @@ class SelectorTool(WorkspaceToolBase):
         self.tree.itemCollapsed.connect(self._on_group_collapsed)
         self.main_layout.addWidget(self.tree)
 
+        # --- second tree (hidden by default) ---
+        self.tree2 = _PaintSelectTree()
+        self.tree2.setVisible(self._pref_show_second())
+        self.main_layout.addWidget(self.tree2)
+
         # --- status ---
         self.status_label = QtWidgets.QLabel("0 items")
         self.status_label.setStyleSheet(
@@ -302,6 +316,18 @@ class SelectorTool(WorkspaceToolBase):
         """Called via evalDeferred so the workspaceControl is fully ready."""
         self._refresh()
         self._install_script_jobs()
+
+    # ── Options / preferences ────────────────────────────────────────────
+
+    def _pref_show_second(self):
+        key = self._opt("showSecondList")
+        if cmds.optionVar(exists=key):
+            return bool(cmds.optionVar(q=key))
+        return False
+
+    def _toggle_second_list(self, checked):
+        cmds.optionVar(iv=(self._opt("showSecondList"), int(checked)))
+        self.tree2.setVisible(checked)
 
     # ── Filter helpers ────────────────────────────────────────────────────
 
