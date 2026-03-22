@@ -276,6 +276,7 @@ class SelectorTool(WorkspaceToolBase):
         self.filter_edit = QtWidgets.QLineEdit()
         self.filter_edit.setPlaceholderText("Filter types  (e.g. joint | transform)")
         self.filter_edit.setClearButtonEnabled(True)
+        self.filter_edit.setText(self._pref_filter_text("filter1"))
         self.filter_edit.returnPressed.connect(self._refresh)
         self.main_layout.addWidget(self.filter_edit)
 
@@ -285,6 +286,9 @@ class SelectorTool(WorkspaceToolBase):
         self._filter_timer.setInterval(400)
         self._filter_timer.timeout.connect(self._refresh)
         self.filter_edit.textChanged.connect(self._restart_filter_timer)
+        self.filter_edit.textChanged.connect(
+            lambda text: self._save_filter_text("filter1", text)
+        )
 
         # --- tree ---
         self.tree = _PaintSelectTree()
@@ -293,9 +297,20 @@ class SelectorTool(WorkspaceToolBase):
         self.tree.itemCollapsed.connect(self._on_group_collapsed)
         self.main_layout.addWidget(self.tree)
 
-        # --- second tree (hidden by default) ---
+        # --- second filter + tree (hidden by default) ---
+        show_second = self._pref_show_second()
+        self.filter_edit2 = QtWidgets.QLineEdit()
+        self.filter_edit2.setPlaceholderText("Filter types  (e.g. joint | transform)")
+        self.filter_edit2.setClearButtonEnabled(True)
+        self.filter_edit2.setText(self._pref_filter_text("filter2"))
+        self.filter_edit2.setVisible(show_second)
+        self.filter_edit2.textChanged.connect(
+            lambda text: self._save_filter_text("filter2", text)
+        )
+        self.main_layout.addWidget(self.filter_edit2)
+
         self.tree2 = _PaintSelectTree()
-        self.tree2.setVisible(self._pref_show_second())
+        self.tree2.setVisible(show_second)
         self.main_layout.addWidget(self.tree2)
 
         # --- status ---
@@ -329,8 +344,18 @@ class SelectorTool(WorkspaceToolBase):
             return bool(cmds.optionVar(q=key))
         return False
 
+    def _pref_filter_text(self, key):
+        opt = self._opt(key)
+        if cmds.optionVar(exists=opt):
+            return cmds.optionVar(q=opt)
+        return ""
+
+    def _save_filter_text(self, key, text):
+        cmds.optionVar(sv=(self._opt(key), text))
+
     def _toggle_second_list(self, checked):
         cmds.optionVar(iv=(self._opt("showSecondList"), int(checked)))
+        self.filter_edit2.setVisible(checked)
         self.tree2.setVisible(checked)
 
     # ── Filter helpers ────────────────────────────────────────────────────
