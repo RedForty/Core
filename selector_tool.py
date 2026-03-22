@@ -48,7 +48,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._painting = False
-        self._anchor_item = None
+        self._anchor_key = None  # long name of the anchor item (survives tree rebuilds)
         self._drag_deselecting = False  # True when Ctrl+click on selected item
         self._pre_drag_selection = set()  # items selected before this drag
         self._handled = False  # True when we handled press ourselves
@@ -70,29 +70,30 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                 ctrl = mods & QtCore.Qt.ControlModifier
 
                 self._handled = True
-                anchor_name = self._anchor_item.text(0) if self._anchor_item else None
-                log.debug("press: item=%s shift=%s ctrl=%s anchor=%s",
-                          item.text(0), bool(shift), bool(ctrl), anchor_name)
+                log.debug("press: item=%s shift=%s ctrl=%s anchor_key=%s",
+                          item.text(0), bool(shift), bool(ctrl),
+                          self._anchor_key)
 
-                if shift and self._anchor_item:
+                if shift and self._anchor_key:
                     # Shift+click: select range from anchor, no drag
                     self._pre_drag_selection = set()
                     self._drag_deselecting = False
                     self._painting = False
-                    log.debug("shift-click: range %s -> %s", anchor_name, item.text(0))
+                    log.debug("shift-click: range %s -> %s",
+                              self._anchor_key, item.text(0))
                     self._apply_range(item)
                     return
 
                 self._painting = True
                 if not ctrl:
                     # Plain click — set new anchor
-                    self._anchor_item = item
+                    self._anchor_key = self._item_key(item)
                     self._pre_drag_selection = set()
                     self._drag_deselecting = False
                     log.debug("plain-click: new anchor=%s", item.text(0))
                 else:
                     # Ctrl+click — new anchor at clicked item, add/remove mode
-                    self._anchor_item = item
+                    self._anchor_key = self._item_key(item)
                     self._pre_drag_selection = set(self.selectedItems())
                     self._drag_deselecting = item.isSelected()
                     log.debug("ctrl-click: anchor=%s pre_drag=%s desel=%s",
@@ -126,6 +127,11 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
 
     # -- helpers -----------------------------------------------------------
 
+    @staticmethod
+    def _item_key(item):
+        """Return the long name stored on *item* (used as a stable identity)."""
+        return item.data(0, QtCore.Qt.UserRole)
+
     def _leaf_items(self):
         """Return all visible non-group items in visual order."""
         items = []
@@ -139,14 +145,27 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
             iterator += 1
         return items
 
+    def _find_anchor(self, leaves):
+        """Return the leaf item matching ``_anchor_key``, or *None*."""
+        if not self._anchor_key:
+            return None
+        for item in leaves:
+            if self._item_key(item) == self._anchor_key:
+                return item
+        return None
+
     def _apply_range(self, end_item):
         """Select (or deselect) the contiguous range from anchor to *end_item*."""
         leaves = self._leaf_items()
+        anchor_item = self._find_anchor(leaves)
+        if not anchor_item:
+            log.debug("_apply_range: anchor_key %r not found in leaves", self._anchor_key)
+            return
         try:
-            anchor_idx = leaves.index(self._anchor_item)
+            anchor_idx = leaves.index(anchor_item)
             end_idx = leaves.index(end_item)
         except ValueError:
-            log.debug("_apply_range: anchor or end not in leaves (stale item?)")
+            log.debug("_apply_range: end item not in leaves")
             return
         log.debug("_apply_range: anchor_idx=%d end_idx=%d leaves=%d",
                    anchor_idx, end_idx, len(leaves))
