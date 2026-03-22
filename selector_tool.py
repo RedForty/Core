@@ -347,11 +347,15 @@ class SelectorTool(WorkspaceToolBase):
     def _pref_filter_text(self, key):
         opt = self._opt(key)
         if cmds.optionVar(exists=opt):
-            return cmds.optionVar(q=opt)
+            val = cmds.optionVar(q=opt)
+            log.debug("_pref_filter_text: %s = %r", opt, val)
+            return val if isinstance(val, str) else ""
         return ""
 
     def _save_filter_text(self, key, text):
-        cmds.optionVar(sv=(self._opt(key), text))
+        opt = self._opt(key)
+        log.debug("_save_filter_text: %s = %r", opt, text)
+        cmds.optionVar(sv=(opt, text))
 
     def _toggle_second_list(self, checked):
         cmds.optionVar(iv=(self._opt("showSecondList"), int(checked)))
