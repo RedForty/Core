@@ -101,7 +101,6 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
             ctrl = mods & QtCore.Qt.ControlModifier
 
             self._handled = True
-            self.setCurrentItem(item)
             log.debug("press: item=%s shift=%s ctrl=%s anchor_key=%s",
                       item.text(0), bool(shift), bool(ctrl),
                       self._anchor_key)
@@ -141,7 +140,6 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         if self._painting:
             item = self.itemAt(event.pos())
             if item and not item.data(0, QtCore.Qt.UserRole + 1):
-                self.setCurrentItem(item)
                 self._apply_range(item)
             return
         if self._handled:
@@ -232,6 +230,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                     if key:
                         selected_keys.append(key)
         self.blockSignals(False)
+        self.setCurrentItem(end_item)
 
         if self._sync_callback:
             self._sync_callback(selected_keys)
