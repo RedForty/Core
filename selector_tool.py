@@ -82,19 +82,41 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                     self._sync_callback([])
                 return
 
-            # --- group header: select all children ---
+            # --- group header: select/toggle children ---
             if item.data(0, QtCore.Qt.UserRole + 1):
                 self._handled = True
                 self._painting = False
+                mods = event.modifiers()
+                ctrl = mods & QtCore.Qt.ControlModifier
+                shift = mods & QtCore.Qt.ShiftModifier
+
                 self.blockSignals(True)
-                self.clearSelection()
+
+                if ctrl:
+                    # Ctrl+click group: toggle — deselect children if any
+                    # are selected, otherwise select all children
+                    children = [item.child(i) for i in range(item.childCount())]
+                    any_selected = any(c.isSelected() for c in children)
+                    for child in children:
+                        child.setSelected(not any_selected)
+                elif shift:
+                    # Shift+click group: add all children to selection
+                    for i in range(item.childCount()):
+                        item.child(i).setSelected(True)
+                else:
+                    # Plain click group: exclusive select all children
+                    self.clearSelection()
+                    for i in range(item.childCount()):
+                        item.child(i).setSelected(True)
+
+                # Gather final selection across entire tree
                 selected_keys = []
-                for i in range(item.childCount()):
-                    child = item.child(i)
-                    child.setSelected(True)
-                    key = self._item_key(child)
-                    if key:
-                        selected_keys.append(key)
+                for leaf in self._leaf_items():
+                    if leaf.isSelected():
+                        key = self._item_key(leaf)
+                        if key:
+                            selected_keys.append(key)
+
                 self.blockSignals(False)
                 if self._sync_callback:
                     self._sync_callback(selected_keys)
