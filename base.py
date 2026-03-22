@@ -297,14 +297,21 @@ class WorkspaceToolBase(QtWidgets.QWidget):
             return
 
         parent = wrapInstance(int(ptr), QtWidgets.QWidget)
-        widget = cls(parent=parent)
 
-        # Maya's workspaceControl container may already have an internal
-        # layout.  Reuse it when present; only create a new one if needed.
+        # Remove any previous widget instance (e.g. from a prior uiScript
+        # rebuild) so we don't end up with duplicates stacked in the layout.
         layout = parent.layout()
         if layout is None:
             layout = QtWidgets.QVBoxLayout(parent)
+        else:
+            while layout.count():
+                child = layout.takeAt(0)
+                if child.widget():
+                    child.widget().deleteLater()
+
         layout.setContentsMargins(0, 0, 0, 0)
+
+        widget = cls(parent=parent)
         layout.addWidget(widget)
         widget.show()
 
