@@ -52,6 +52,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         self._drag_deselecting = False  # True when Ctrl+click on selected item
         self._pre_drag_selection = set()  # items selected before this drag
         self._handled = False  # True when we handled press ourselves
+        self._sync_callback = None  # set by SelectorTool for tree→Maya sync
         self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.setDragEnabled(False)
         self.setAcceptDrops(False)
@@ -64,44 +65,74 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.LeftButton:
             item = self.itemAt(event.pos())
-            if item and not item.data(0, QtCore.Qt.UserRole + 1):
-                mods = event.modifiers()
-                shift = mods & QtCore.Qt.ShiftModifier
-                ctrl = mods & QtCore.Qt.ControlModifier
 
+            # --- empty space: clear selection ---
+            if not item:
                 self._handled = True
-                log.debug("press: item=%s shift=%s ctrl=%s anchor_key=%s",
-                          item.text(0), bool(shift), bool(ctrl),
-                          self._anchor_key)
+                self._painting = False
+                self.blockSignals(True)
+                self.clearSelection()
+                self.blockSignals(False)
+                if self._sync_callback:
+                    self._sync_callback([])
+                return
 
-                if shift and self._anchor_key:
-                    # Shift+click: select range from anchor, no drag
-                    self._pre_drag_selection = set()
-                    self._drag_deselecting = False
-                    self._painting = False
-                    log.debug("shift-click: range %s -> %s",
-                              self._anchor_key, item.text(0))
-                    self._apply_range(item)
-                    return
+            # --- group header: select all children ---
+            if item.data(0, QtCore.Qt.UserRole + 1):
+                self._handled = True
+                self._painting = False
+                self.blockSignals(True)
+                self.clearSelection()
+                selected_keys = []
+                for i in range(item.childCount()):
+                    child = item.child(i)
+                    child.setSelected(True)
+                    key = self._item_key(child)
+                    if key:
+                        selected_keys.append(key)
+                self.blockSignals(False)
+                if self._sync_callback:
+                    self._sync_callback(selected_keys)
+                return
 
-                self._painting = True
-                if not ctrl:
-                    # Plain click — set new anchor
-                    self._anchor_key = self._item_key(item)
-                    self._pre_drag_selection = set()
-                    self._drag_deselecting = False
-                    log.debug("plain-click: new anchor=%s", item.text(0))
-                else:
-                    # Ctrl+click — new anchor at clicked item, add/remove mode
-                    self._anchor_key = self._item_key(item)
-                    self._pre_drag_selection = set(self.selectedItems())
-                    self._drag_deselecting = item.isSelected()
-                    log.debug("ctrl-click: anchor=%s pre_drag=%s desel=%s",
-                              item.text(0),
-                              [i.text(0) for i in self._pre_drag_selection],
-                              self._drag_deselecting)
+            # --- leaf item ---
+            mods = event.modifiers()
+            shift = mods & QtCore.Qt.ShiftModifier
+            ctrl = mods & QtCore.Qt.ControlModifier
+
+            self._handled = True
+            log.debug("press: item=%s shift=%s ctrl=%s anchor_key=%s",
+                      item.text(0), bool(shift), bool(ctrl),
+                      self._anchor_key)
+
+            if shift and self._anchor_key:
+                # Shift+click: select range from anchor, no drag
+                self._pre_drag_selection = set()
+                self._drag_deselecting = False
+                self._painting = False
+                log.debug("shift-click: range %s -> %s",
+                          self._anchor_key, item.text(0))
                 self._apply_range(item)
                 return
+
+            self._painting = True
+            if not ctrl:
+                # Plain click — set new anchor
+                self._anchor_key = self._item_key(item)
+                self._pre_drag_selection = set()
+                self._drag_deselecting = False
+                log.debug("plain-click: new anchor=%s", item.text(0))
+            else:
+                # Ctrl+click — new anchor at clicked item, add/remove mode
+                self._anchor_key = self._item_key(item)
+                self._pre_drag_selection = set(self.selectedItems())
+                self._drag_deselecting = item.isSelected()
+                log.debug("ctrl-click: anchor=%s pre_drag=%s desel=%s",
+                          item.text(0),
+                          [i.text(0) for i in self._pre_drag_selection],
+                          self._drag_deselecting)
+            self._apply_range(item)
+            return
         self._handled = False
         super().mousePressEvent(event)
 
@@ -176,22 +207,32 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         range_set = set(leaves[lo:hi + 1])
 
         self.blockSignals(True)
-        self.clearSelection()  # clear stale group-header selections too
+        self.clearSelection()
+        selected_keys = []
         if self._drag_deselecting:
             for item in leaves:
                 should_select = (
                     item in self._pre_drag_selection and item not in range_set
                 )
                 item.setSelected(should_select)
+                if should_select:
+                    key = self._item_key(item)
+                    if key:
+                        selected_keys.append(key)
         else:
             for item in leaves:
                 should_select = (
                     item in range_set or item in self._pre_drag_selection
                 )
                 item.setSelected(should_select)
+                if should_select:
+                    key = self._item_key(item)
+                    if key:
+                        selected_keys.append(key)
         self.blockSignals(False)
 
-        self.itemSelectionChanged.emit()
+        if self._sync_callback:
+            self._sync_callback(selected_keys)
 
 
 # ---------------------------------------------------------------------------
@@ -231,10 +272,9 @@ class SelectorTool(WorkspaceToolBase):
 
         # --- tree ---
         self.tree = _PaintSelectTree()
-        self.tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
+        self.tree._sync_callback = self._apply_maya_selection
         self.tree.itemExpanded.connect(self._on_group_expanded)
         self.tree.itemCollapsed.connect(self._on_group_collapsed)
-        self.tree.paintSelectFinished.connect(self._on_tree_selection_changed)
         self.main_layout.addWidget(self.tree)
 
         # --- status ---
@@ -386,35 +426,16 @@ class SelectorTool(WorkspaceToolBase):
 
     # ── Selection sync: tree → viewport ───────────────────────────────────
 
-    def _on_tree_selection_changed(self):
+    def _apply_maya_selection(self, long_names):
+        """Sync a definitive list of long-names to Maya's selection."""
         if self._syncing:
             return
-
         self._syncing = True
         try:
-            nodes_to_select = []
-            # Block signals while we may modify selection (group-header expansion)
-            self.tree.blockSignals(True)
-            for item in self.tree.selectedItems():
-                is_group = item.data(0, QtCore.Qt.UserRole + 1)
-                if is_group:
-                    # Select all children
-                    for i in range(item.childCount()):
-                        child = item.child(i)
-                        child.setSelected(True)
-                        long_name = child.data(0, QtCore.Qt.UserRole)
-                        if long_name and cmds.objExists(long_name):
-                            nodes_to_select.append(long_name)
-                else:
-                    long_name = item.data(0, QtCore.Qt.UserRole)
-                    if long_name and cmds.objExists(long_name):
-                        nodes_to_select.append(long_name)
-            self.tree.blockSignals(False)
-
-            log.debug("_on_tree_selection_changed: selecting %d nodes",
-                       len(nodes_to_select))
-            if nodes_to_select:
-                cmds.select(nodes_to_select, replace=True)
+            nodes = [n for n in long_names if n and cmds.objExists(n)]
+            log.debug("_apply_maya_selection: selecting %d nodes", len(nodes))
+            if nodes:
+                cmds.select(nodes, replace=True)
             else:
                 cmds.select(clear=True)
         finally:
