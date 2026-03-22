@@ -286,9 +286,7 @@ class SelectorTool(WorkspaceToolBase):
         self._filter_timer.setInterval(400)
         self._filter_timer.timeout.connect(self._refresh)
         self.filter_edit.textChanged.connect(self._restart_filter_timer)
-        self.filter_edit.textChanged.connect(
-            lambda text: self._save_filter_text("filter1", text)
-        )
+        self.filter_edit.textChanged.connect(self._save_filter1)
 
         # --- tree ---
         self.tree = _PaintSelectTree()
@@ -304,9 +302,7 @@ class SelectorTool(WorkspaceToolBase):
         self.filter_edit2.setClearButtonEnabled(True)
         self.filter_edit2.setText(self._pref_filter_text("filter2"))
         self.filter_edit2.setVisible(show_second)
-        self.filter_edit2.textChanged.connect(
-            lambda text: self._save_filter_text("filter2", text)
-        )
+        self.filter_edit2.textChanged.connect(self._save_filter2)
         self.main_layout.addWidget(self.filter_edit2)
 
         self.tree2 = _PaintSelectTree()
@@ -351,6 +347,12 @@ class SelectorTool(WorkspaceToolBase):
             log.debug("_pref_filter_text: %s = %r", opt, val)
             return val if isinstance(val, str) else ""
         return ""
+
+    def _save_filter1(self, text):
+        self._save_filter_text("filter1", text)
+
+    def _save_filter2(self, text):
+        self._save_filter_text("filter2", text)
 
     def _save_filter_text(self, key, text):
         opt = self._opt(key)
