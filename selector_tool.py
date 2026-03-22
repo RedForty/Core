@@ -47,6 +47,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         self._anchor_item = None
         self._drag_deselecting = False  # True when Ctrl+click on selected item
         self._pre_drag_selection = set()  # items selected before this drag
+        self._handled = False  # True when we handled press ourselves
         self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.setDragEnabled(False)
         self.setAcceptDrops(False)
@@ -64,10 +65,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                 shift = mods & QtCore.Qt.ShiftModifier
                 ctrl = mods & QtCore.Qt.ControlModifier
 
-                print("[DEBUG] shift={} ctrl={} anchor={} item={}".format(
-                    bool(shift), bool(ctrl),
-                    self._anchor_item.text(0) if self._anchor_item else None,
-                    item.text(0)))
+                self._handled = True
 
                 if shift and self._anchor_item:
                     # Shift+click: select range from anchor, no drag
@@ -91,6 +89,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                     self._drag_deselecting = item.isSelected()
                 self._apply_range(item)
                 return
+        self._handled = False
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -102,12 +101,15 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if self._painting and event.button() == QtCore.Qt.LeftButton:
-            self._painting = False
-            self._drag_deselecting = False
-            self._pre_drag_selection = set()
-            self.paintSelectFinished.emit()
+        if event.button() == QtCore.Qt.LeftButton and self._handled:
+            if self._painting:
+                self._painting = False
+                self._drag_deselecting = False
+                self._pre_drag_selection = set()
+                self.paintSelectFinished.emit()
+            self._handled = False
             return
+        self._handled = False
         super().mouseReleaseEvent(event)
 
     # -- helpers -----------------------------------------------------------
@@ -128,17 +130,11 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
     def _apply_range(self, end_item):
         """Select (or deselect) the contiguous range from anchor to *end_item*."""
         leaves = self._leaf_items()
-        print("[DEBUG] _apply_range: anchor={} end={} leaf_count={}".format(
-            self._anchor_item.text(0) if self._anchor_item else None,
-            end_item.text(0), len(leaves)))
         try:
             anchor_idx = leaves.index(self._anchor_item)
             end_idx = leaves.index(end_item)
-        except ValueError as e:
-            print("[DEBUG] _apply_range ValueError: {}".format(e))
+        except ValueError:
             return
-        print("[DEBUG] _apply_range: anchor_idx={} end_idx={}".format(
-            anchor_idx, end_idx))
 
         lo, hi = sorted((anchor_idx, end_idx))
         range_set = set(leaves[lo:hi + 1])
