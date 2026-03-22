@@ -636,11 +636,11 @@ class SelectorTool(WorkspaceToolBase):
                 ug_item.setExpanded(True)
 
             self.status_label.setText(f"{item_count} items")
-
-            # Restore selection highlight from Maya's current selection
-            self._sync_from_viewport()
         finally:
             self._syncing = False
+
+        # Restore selection highlight from Maya's current selection
+        self._sync_from_viewport()
 
     # ── Right-click context menu ─────────────────────────────────────────
 
