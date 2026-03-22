@@ -111,6 +111,8 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
             if item and not item.data(0, QtCore.Qt.UserRole + 1):
                 self._apply_range(item)
             return
+        if self._handled:
+            return  # suppress Qt's default during shift-click (no paint)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -391,6 +393,8 @@ class SelectorTool(WorkspaceToolBase):
         self._syncing = True
         try:
             nodes_to_select = []
+            # Block signals while we may modify selection (group-header expansion)
+            self.tree.blockSignals(True)
             for item in self.tree.selectedItems():
                 is_group = item.data(0, QtCore.Qt.UserRole + 1)
                 if is_group:
@@ -405,7 +409,10 @@ class SelectorTool(WorkspaceToolBase):
                     long_name = item.data(0, QtCore.Qt.UserRole)
                     if long_name and cmds.objExists(long_name):
                         nodes_to_select.append(long_name)
+            self.tree.blockSignals(False)
 
+            log.debug("_on_tree_selection_changed: selecting %d nodes",
+                       len(nodes_to_select))
             if nodes_to_select:
                 cmds.select(nodes_to_select, replace=True)
             else:
@@ -423,6 +430,7 @@ class SelectorTool(WorkspaceToolBase):
         self._syncing = True
         try:
             sel = set(cmds.ls(selection=True, long=True) or [])
+            log.debug("_sync_from_viewport: %d items from Maya", len(sel))
             self.tree.blockSignals(True)
             self.tree.clearSelection()
 
@@ -441,6 +449,10 @@ class SelectorTool(WorkspaceToolBase):
     def _on_viewport_selection_changed(self):
         """ScriptJob callback for SelectionChanged."""
         if self._syncing:
+            return
+        # Don't let Maya override tree selection while we own the interaction
+        if self.tree._handled:
+            log.debug("_on_viewport_selection_changed: suppressed (tree._handled)")
             return
         self._sync_from_viewport()
 
