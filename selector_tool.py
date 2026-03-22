@@ -17,6 +17,7 @@ Or via the module-level helper:
     my_tools.selector_tool.show()
 """
 
+import logging
 import maya.cmds as cmds
 
 try:
@@ -25,6 +26,9 @@ except ImportError:
     from PySide6 import QtWidgets, QtCore, QtGui
 
 from .base import WorkspaceToolBase
+
+log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
 
 
 # ---------------------------------------------------------------------------
@@ -66,12 +70,16 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                 ctrl = mods & QtCore.Qt.ControlModifier
 
                 self._handled = True
+                anchor_name = self._anchor_item.text(0) if self._anchor_item else None
+                log.debug("press: item=%s shift=%s ctrl=%s anchor=%s",
+                          item.text(0), bool(shift), bool(ctrl), anchor_name)
 
                 if shift and self._anchor_item:
                     # Shift+click: select range from anchor, no drag
                     self._pre_drag_selection = set()
                     self._drag_deselecting = False
                     self._painting = False
+                    log.debug("shift-click: range %s -> %s", anchor_name, item.text(0))
                     self._apply_range(item)
                     return
 
@@ -81,11 +89,16 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                     self._anchor_item = item
                     self._pre_drag_selection = set()
                     self._drag_deselecting = False
+                    log.debug("plain-click: new anchor=%s", item.text(0))
                 else:
                     # Ctrl+click — new anchor at clicked item, add/remove mode
                     self._anchor_item = item
                     self._pre_drag_selection = set(self.selectedItems())
                     self._drag_deselecting = item.isSelected()
+                    log.debug("ctrl-click: anchor=%s pre_drag=%s desel=%s",
+                              item.text(0),
+                              [i.text(0) for i in self._pre_drag_selection],
+                              self._drag_deselecting)
                 self._apply_range(item)
                 return
         self._handled = False
@@ -133,7 +146,10 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
             anchor_idx = leaves.index(self._anchor_item)
             end_idx = leaves.index(end_item)
         except ValueError:
+            log.debug("_apply_range: anchor or end not in leaves (stale item?)")
             return
+        log.debug("_apply_range: anchor_idx=%d end_idx=%d leaves=%d",
+                   anchor_idx, end_idx, len(leaves))
 
         lo, hi = sorted((anchor_idx, end_idx))
         range_set = set(leaves[lo:hi + 1])
