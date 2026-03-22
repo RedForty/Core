@@ -99,7 +99,6 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
     def mouseReleaseEvent(self, event):
         if self._painting and event.button() == QtCore.Qt.LeftButton:
             self._painting = False
-            self._anchor_item = None
             self._drag_deselecting = False
             self._pre_drag_selection = set()
             self.paintSelectFinished.emit()
