@@ -67,10 +67,6 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
 
                 self._handled = True
 
-                print("[DEBUG] press: shift={} ctrl={} item={} anchor={}".format(
-                    bool(shift), bool(ctrl), item.text(0),
-                    self._anchor_item.text(0) if self._anchor_item else None))
-
                 if shift and self._anchor_item:
                     # Shift+click: select range from anchor, no drag
                     self._pre_drag_selection = set()
@@ -90,10 +86,6 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                     self._anchor_item = item
                     self._pre_drag_selection = set(self.selectedItems())
                     self._drag_deselecting = item.isSelected()
-                    print("[DEBUG] ctrl path: anchor={} pre_drag={} desel={}".format(
-                        item.text(0),
-                        [i.text(0) for i in self._pre_drag_selection],
-                        self._drag_deselecting))
                 self._apply_range(item)
                 return
         self._handled = False
