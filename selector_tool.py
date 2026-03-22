@@ -22,8 +22,10 @@ import maya.cmds as cmds
 
 try:
     from PySide2 import QtWidgets, QtCore, QtGui
+    from shiboken2 import isValid
 except ImportError:
     from PySide6 import QtWidgets, QtCore, QtGui
+    from shiboken6 import isValid
 
 from .base import WorkspaceToolBase
 
@@ -314,6 +316,8 @@ class SelectorTool(WorkspaceToolBase):
 
     def _deferred_init(self):
         """Called via evalDeferred so the workspaceControl is fully ready."""
+        if not isValid(self):
+            return
         self._refresh()
         self._install_script_jobs()
 
