@@ -349,6 +349,8 @@ class SelectorTool(WorkspaceToolBase):
 
     def _refresh(self):
         """Re-scan the scene and rebuild the tree."""
+        if not isValid(self):
+            return
         self._filter_timer.stop()
 
         self._syncing = True
