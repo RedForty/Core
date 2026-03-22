@@ -230,7 +230,11 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                     if key:
                         selected_keys.append(key)
         self.blockSignals(False)
-        self.setCurrentItem(end_item)
+        # Set focus rect without changing selection state
+        idx = self.indexFromItem(end_item)
+        self.selectionModel().setCurrentIndex(
+            idx, QtCore.QItemSelectionModel.NoUpdate
+        )
 
         if self._sync_callback:
             self._sync_callback(selected_keys)
