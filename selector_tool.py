@@ -82,9 +82,8 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                     self._pre_drag_selection = set()
                     self._drag_deselecting = False
                 else:
-                    # Ctrl+click — keep anchor, add/remove mode
-                    if not self._anchor_item:
-                        self._anchor_item = item
+                    # Ctrl+click — new anchor at clicked item, add/remove mode
+                    self._anchor_item = item
                     self._pre_drag_selection = set(self.selectedItems())
                     self._drag_deselecting = item.isSelected()
                 self._apply_range(item)
