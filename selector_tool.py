@@ -164,7 +164,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                     for i in range(item.childCount()):
                         item.child(i).setSelected(True)
 
-                # Sync clones: gather selected keys, then select all matching
+                # Sync clones: gather selected keys, then set all leaves
                 leaves = self._leaf_items()
                 selected_keys_set = set()
                 for leaf in leaves:
@@ -174,8 +174,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                             selected_keys_set.add(key)
                 for leaf in leaves:
                     key = self._item_key(leaf)
-                    if key and key in selected_keys_set:
-                        leaf.setSelected(True)
+                    leaf.setSelected(bool(key and key in selected_keys_set))
 
                 self.blockSignals(False)
                 if self._sync_callback:
