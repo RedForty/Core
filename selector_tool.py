@@ -409,12 +409,18 @@ class SelectorTool(WorkspaceToolBase):
         self.tree2.setVisible(show_second)
         self.main_layout.addWidget(self.tree2)
 
-        # --- status ---
+        # --- status bar ---
+        _status_style = "color: grey; font-size: 10px; padding: 2px;"
+        status_layout = QtWidgets.QHBoxLayout()
+        status_layout.setContentsMargins(0, 0, 0, 0)
         self.status_label = QtWidgets.QLabel("0 items")
-        self.status_label.setStyleSheet(
-            "color: grey; font-size: 10px; padding: 2px;"
-        )
-        self.main_layout.addWidget(self.status_label)
+        self.status_label.setStyleSheet(_status_style)
+        self.sel_count_label = QtWidgets.QLabel("")
+        self.sel_count_label.setStyleSheet(_status_style)
+        self.sel_count_label.setAlignment(QtCore.Qt.AlignRight)
+        status_layout.addWidget(self.status_label)
+        status_layout.addWidget(self.sel_count_label)
+        self.main_layout.addLayout(status_layout)
 
         # --- style tweaks for tree group headers ---
         self.tree.setStyleSheet("""
@@ -668,6 +674,7 @@ class SelectorTool(WorkspaceToolBase):
                     iterator += 1
                 self.tree.blockSignals(False)
                 self.tree._update_group_tints()
+                self._update_sel_count()
         finally:
             self._syncing = False
 
@@ -798,6 +805,20 @@ class SelectorTool(WorkspaceToolBase):
 
     # ── Selection sync: tree → viewport ───────────────────────────────────
 
+    def _update_sel_count(self):
+        """Update the selected-count label from the tree's current selection."""
+        keys = set()
+        iterator = QtWidgets.QTreeWidgetItemIterator(self.tree)
+        while iterator.value():
+            item = iterator.value()
+            if item.isSelected():
+                key = item.data(0, QtCore.Qt.UserRole)
+                if key:
+                    keys.add(key)
+            iterator += 1
+        n = len(keys)
+        self.sel_count_label.setText(f"{n} selected" if n else "")
+
     def _apply_maya_selection(self, long_names):
         """Sync a definitive list of long-names to Maya's selection."""
         if self._syncing:
@@ -810,6 +831,7 @@ class SelectorTool(WorkspaceToolBase):
                 cmds.select(nodes, replace=True)
             else:
                 cmds.select(clear=True)
+            self._update_sel_count()
         finally:
             self._syncing = False
 
@@ -837,6 +859,7 @@ class SelectorTool(WorkspaceToolBase):
 
             self.tree.blockSignals(False)
             self.tree._update_group_tints()
+            self._update_sel_count()
         finally:
             self._syncing = False
 
