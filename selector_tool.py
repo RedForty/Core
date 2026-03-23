@@ -42,7 +42,7 @@ def _signals_blocked(widget):
         widget.blockSignals(False)
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
+log.setLevel(logging.INFO)
 
 
 # ---------------------------------------------------------------------------
