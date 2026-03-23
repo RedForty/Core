@@ -150,25 +150,14 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                 # Collect keys for this group's children and current selection
                 leaves = self._leaf_items()
                 children = [item.child(i) for i in range(item.childCount())]
-                log.debug("group click: group=%s ctrl=%s shift=%s "
-                          "childCount=%d children_texts=%s",
-                          item.text(0), bool(ctrl), bool(shift),
-                          item.childCount(),
-                          [c.text(0) for c in children])
                 group_keys = {self._item_key(c) for c in children} - {None}
                 current_keys = {self._item_key(l) for l in leaves
                                 if l.isSelected()} - {None}
-                log.debug("group click: group_keys=%s current_keys=%s",
-                          group_keys, current_keys)
 
                 if ctrl:
                     # Ctrl+click group: toggle — remove keys if any
                     # children selected, otherwise add them
                     any_selected = bool(group_keys & current_keys)
-                    log.debug("group ctrl: any_selected=%s result_keys=%s",
-                              any_selected,
-                              current_keys - group_keys if any_selected
-                              else current_keys | group_keys)
                     if any_selected:
                         selected_keys_set = current_keys - group_keys
                     else:
