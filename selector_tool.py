@@ -92,6 +92,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         super().__init__(parent)
         self._painting = False
         self._anchor_key = None  # long name of the anchor item (survives tree rebuilds)
+        self._anchor_item = None  # direct QTreeWidgetItem ref (fast, but invalidated on rebuild)
         self._drag_deselecting = False  # True when Ctrl+click on selected item
         self._pre_drag_selection = set()  # items selected before this drag
         self._handled = False  # True when we handled press ourselves
@@ -201,12 +202,14 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
             if not ctrl:
                 # Plain click — set new anchor
                 self._anchor_key = self._item_key(item)
+                self._anchor_item = item
                 self._pre_drag_selection = set()
                 self._drag_deselecting = False
                 log.debug("plain-click: new anchor=%s", item.text(0))
             else:
                 # Ctrl+click — new anchor at clicked item, add/remove mode
                 self._anchor_key = self._item_key(item)
+                self._anchor_item = item
                 self._pre_drag_selection = set(self.selectedItems())
                 self._drag_deselecting = item.isSelected()
                 log.debug("ctrl-click: anchor=%s pre_drag=%s desel=%s",
@@ -265,11 +268,20 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         return items
 
     def _find_anchor(self, leaves):
-        """Return the leaf item matching ``_anchor_key``, or *None*."""
+        """Return the leaf item matching the anchor, or *None*.
+
+        Prefers the direct item reference (handles duplicates across groups)
+        and falls back to key-based lookup (survives tree rebuilds).
+        """
+        # Fast path: direct reference still valid and present in current leaves
+        if self._anchor_item is not None and self._anchor_item in leaves:
+            return self._anchor_item
+        # Fallback: key-based lookup (e.g. after tree rebuild)
         if not self._anchor_key:
             return None
         for item in leaves:
             if self._item_key(item) == self._anchor_key:
+                self._anchor_item = item  # cache for next time
                 return item
         return None
 
@@ -529,6 +541,7 @@ class SelectorTool(WorkspaceToolBase):
 
         self._syncing = True
         try:
+            self.tree._anchor_item = None  # invalidate; _find_anchor will re-resolve from key
             self.tree.blockSignals(True)
             self.tree.clear()
             self.tree.blockSignals(False)
