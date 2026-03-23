@@ -503,13 +503,35 @@ class SelectorTool(WorkspaceToolBase):
 
     _CONFIG_FILENAME = "selectorTool_config.json"
 
+    _COLLAPSED_KEY = "__collapsed__"
+
+    def _load_collapsed_groups(self):
+        """Return set of group names that should be collapsed."""
+        cfg = self._load_scene_config()
+        return set(cfg.get(self._COLLAPSED_KEY, []))
+
+    def _save_collapsed_groups(self, collapsed):
+        """Persist the set of collapsed group names."""
+        cfg = self._load_scene_config()
+        if collapsed:
+            cfg[self._COLLAPSED_KEY] = sorted(collapsed)
+        else:
+            cfg.pop(self._COLLAPSED_KEY, None)
+        self._save_scene_config(cfg)
+
     def _load_custom_groups(self):
         """Return custom groups for the current scene. {name: [long_names]}"""
-        return self._load_scene_config()
+        cfg = self._load_scene_config()
+        return {k: v for k, v in cfg.items() if k != self._COLLAPSED_KEY}
 
     def _save_custom_groups(self, groups):
         """Save custom groups for the current scene."""
-        self._save_scene_config(groups)
+        cfg = self._load_scene_config()
+        collapsed = cfg.get(self._COLLAPSED_KEY)
+        cfg = dict(groups)
+        if collapsed:
+            cfg[self._COLLAPSED_KEY] = collapsed
+        self._save_scene_config(cfg)
 
     # ── Tree-item factories ─────────────────────────────────────────────
 
@@ -598,6 +620,7 @@ class SelectorTool(WorkspaceToolBase):
 
             # ---- Custom groups (take priority) ----
             custom_groups = self._load_custom_groups()
+            collapsed = self._load_collapsed_groups()
             assigned = set()
 
             item_count = 0
@@ -613,7 +636,7 @@ class SelectorTool(WorkspaceToolBase):
                 for long_name in nodes:
                     group_item.addChild(self._make_leaf_item(long_name))
                     item_count += 1
-                group_item.setExpanded(True)
+                group_item.setExpanded(grp_name not in collapsed)
 
             # ---- Selection-set groups (for remaining items) ----
             remaining = matching - assigned
@@ -645,7 +668,7 @@ class SelectorTool(WorkspaceToolBase):
                 for long_name in group_nodes:
                     group_item.addChild(self._make_leaf_item(long_name))
                     item_count += 1
-                group_item.setExpanded(True)
+                group_item.setExpanded(s not in collapsed)
 
             # ---- Ungrouped section ----
             ungrouped = sorted(
@@ -658,7 +681,7 @@ class SelectorTool(WorkspaceToolBase):
                 for long_name in ungrouped:
                     ug_item.addChild(self._make_leaf_item(long_name))
                     item_count += 1
-                ug_item.setExpanded(True)
+                ug_item.setExpanded(self.UNGROUPED_LABEL not in collapsed)
 
             self.status_label.setText(f"{item_count} items")
 
@@ -798,10 +821,16 @@ class SelectorTool(WorkspaceToolBase):
     # ── Group click → select all children ─────────────────────────────────
 
     def _on_group_expanded(self, item):
-        pass  # default behaviour is fine
+        if item.data(0, QtCore.Qt.UserRole + 1):
+            collapsed = self._load_collapsed_groups()
+            collapsed.discard(item.text(0))
+            self._save_collapsed_groups(collapsed)
 
     def _on_group_collapsed(self, item):
-        pass
+        if item.data(0, QtCore.Qt.UserRole + 1):
+            collapsed = self._load_collapsed_groups()
+            collapsed.add(item.text(0))
+            self._save_collapsed_groups(collapsed)
 
     # ── Selection sync: tree → viewport ───────────────────────────────────
 
