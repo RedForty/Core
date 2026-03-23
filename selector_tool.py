@@ -164,17 +164,22 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                     for i in range(item.childCount()):
                         item.child(i).setSelected(True)
 
-                # Gather final selection across entire tree
-                selected_keys = []
-                for leaf in self._leaf_items():
+                # Sync clones: gather selected keys, then select all matching
+                leaves = self._leaf_items()
+                selected_keys_set = set()
+                for leaf in leaves:
                     if leaf.isSelected():
                         key = self._item_key(leaf)
                         if key:
-                            selected_keys.append(key)
+                            selected_keys_set.add(key)
+                for leaf in leaves:
+                    key = self._item_key(leaf)
+                    if key and key in selected_keys_set:
+                        leaf.setSelected(True)
 
                 self.blockSignals(False)
                 if self._sync_callback:
-                    self._sync_callback(selected_keys)
+                    self._sync_callback(list(selected_keys_set))
                 self._update_group_tints()
                 return
 
@@ -286,7 +291,12 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         return None
 
     def _apply_range(self, end_item):
-        """Select (or deselect) the contiguous range from anchor to *end_item*."""
+        """Select (or deselect) the contiguous range from anchor to *end_item*.
+
+        After computing the range, all clones (items sharing the same key in
+        other groups) are brought into the same selected/deselected state so
+        that duplicates always stay in sync.
+        """
         leaves = self._leaf_items()
         anchor_item = self._find_anchor(leaves)
         if not anchor_item:
@@ -306,27 +316,27 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
 
         self.blockSignals(True)
         self.clearSelection()
-        selected_keys = []
+
+        # First pass: determine selected keys from range + pre-drag state
+        selected_keys_set = set()
         if self._drag_deselecting:
             for item in leaves:
-                should_select = (
-                    item in self._pre_drag_selection and item not in range_set
-                )
-                item.setSelected(should_select)
-                if should_select:
+                if item in self._pre_drag_selection and item not in range_set:
                     key = self._item_key(item)
                     if key:
-                        selected_keys.append(key)
+                        selected_keys_set.add(key)
         else:
             for item in leaves:
-                should_select = (
-                    item in range_set or item in self._pre_drag_selection
-                )
-                item.setSelected(should_select)
-                if should_select:
+                if item in range_set or item in self._pre_drag_selection:
                     key = self._item_key(item)
                     if key:
-                        selected_keys.append(key)
+                        selected_keys_set.add(key)
+
+        # Second pass: apply selection, including clones that share a key
+        for item in leaves:
+            key = self._item_key(item)
+            item.setSelected(bool(key and key in selected_keys_set))
+
         self.blockSignals(False)
         # Set focus rect without changing selection state
         idx = self.indexFromItem(end_item)
@@ -335,7 +345,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         )
 
         if self._sync_callback:
-            self._sync_callback(selected_keys)
+            self._sync_callback(list(selected_keys_set))
         self._update_group_tints()
 
 
