@@ -312,25 +312,19 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                    anchor_idx, end_idx, len(leaves))
 
         lo, hi = sorted((anchor_idx, end_idx))
-        range_set = set(leaves[lo:hi + 1])
+        range_items = leaves[lo:hi + 1]
+
+        # Collect keys so clone-aware add/remove operates on identity, not position
+        range_keys = {self._item_key(i) for i in range_items} - {None}
+        pre_drag_keys = {self._item_key(i) for i in self._pre_drag_selection} - {None}
 
         self.blockSignals(True)
         self.clearSelection()
 
-        # First pass: determine selected keys from range + pre-drag state
-        selected_keys_set = set()
         if self._drag_deselecting:
-            for item in leaves:
-                if item in self._pre_drag_selection and item not in range_set:
-                    key = self._item_key(item)
-                    if key:
-                        selected_keys_set.add(key)
+            selected_keys_set = pre_drag_keys - range_keys
         else:
-            for item in leaves:
-                if item in range_set or item in self._pre_drag_selection:
-                    key = self._item_key(item)
-                    if key:
-                        selected_keys_set.add(key)
+            selected_keys_set = range_keys | pre_drag_keys
 
         # Second pass: apply selection, including clones that share a key
         for item in leaves:
