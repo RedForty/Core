@@ -101,6 +101,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
     Dragging back shrinks the selection — standard list-box behaviour.
     """
 
+    paintSelectStarted  = QtCore.Signal()
     paintSelectFinished = QtCore.Signal()
 
     def __init__(self, parent=None):
@@ -230,6 +231,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                           item.text(0),
                           [i.text(0) for i in self._pre_drag_selection],
                           self._drag_deselecting)
+            self.paintSelectStarted.emit()
             self._apply_range(item)
             return
         self._handled = False
@@ -432,6 +434,8 @@ class SelectorTool(WorkspaceToolBase):
         # --- tree ---
         self.tree = _PaintSelectTree()
         self.tree._sync_callback = self._apply_maya_selection
+        self.tree.paintSelectStarted.connect(self._open_undo_chunk)
+        self.tree.paintSelectFinished.connect(self._close_undo_chunk)
         self.tree.itemExpanded.connect(self._on_group_expanded)
         self.tree.itemCollapsed.connect(self._on_group_collapsed)
         self.tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
@@ -917,6 +921,18 @@ class SelectorTool(WorkspaceToolBase):
             collapsed = self._load_collapsed_groups()
             collapsed.add(item.text(0))
             self._save_collapsed_groups(collapsed)
+
+    # ── Undo chunk for paint-select ──────────────────────────────────────
+
+    _UNDO_CHUNK_NAME = "SelectorTool_paintSelect"
+
+    def _open_undo_chunk(self):
+        """Open a Maya undo chunk so the entire paint-drag is one undo step."""
+        cmds.undoInfo(openChunk=True, chunkName=self._UNDO_CHUNK_NAME)
+
+    def _close_undo_chunk(self):
+        """Close the paint-select undo chunk."""
+        cmds.undoInfo(closeChunk=True)
 
     # ── Selection sync: tree → viewport ───────────────────────────────────
 
