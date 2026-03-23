@@ -147,31 +147,29 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
 
                 self.blockSignals(True)
 
+                # Collect keys for this group's children and current selection
+                leaves = self._leaf_items()
+                children = [item.child(i) for i in range(item.childCount())]
+                group_keys = {self._item_key(c) for c in children} - {None}
+                current_keys = {self._item_key(l) for l in leaves
+                                if l.isSelected()} - {None}
+
                 if ctrl:
-                    # Ctrl+click group: toggle — deselect children if any
-                    # are selected, otherwise select all children
-                    children = [item.child(i) for i in range(item.childCount())]
-                    any_selected = any(c.isSelected() for c in children)
-                    for child in children:
-                        child.setSelected(not any_selected)
+                    # Ctrl+click group: toggle — remove keys if any
+                    # children selected, otherwise add them
+                    any_selected = bool(group_keys & current_keys)
+                    if any_selected:
+                        selected_keys_set = current_keys - group_keys
+                    else:
+                        selected_keys_set = current_keys | group_keys
                 elif shift:
                     # Shift+click group: add all children to selection
-                    for i in range(item.childCount()):
-                        item.child(i).setSelected(True)
+                    selected_keys_set = current_keys | group_keys
                 else:
                     # Plain click group: exclusive select all children
-                    self.clearSelection()
-                    for i in range(item.childCount()):
-                        item.child(i).setSelected(True)
+                    selected_keys_set = group_keys
 
-                # Sync clones: gather selected keys, then set all leaves
-                leaves = self._leaf_items()
-                selected_keys_set = set()
-                for leaf in leaves:
-                    if leaf.isSelected():
-                        key = self._item_key(leaf)
-                        if key:
-                            selected_keys_set.add(key)
+                # Apply selection to all leaves (clone-aware)
                 for leaf in leaves:
                     key = self._item_key(leaf)
                     leaf.setSelected(bool(key and key in selected_keys_set))
