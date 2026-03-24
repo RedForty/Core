@@ -46,6 +46,19 @@ log.setLevel(logging.INFO)
 
 
 # ---------------------------------------------------------------------------
+#   Named data-roles for QTreeWidgetItem.data(0, role)
+# ---------------------------------------------------------------------------
+ROLE_LONG_NAME    = QtCore.Qt.UserRole       # str  – DAG long name
+ROLE_IS_GROUP     = QtCore.Qt.UserRole + 1   # bool – True for group headers
+ROLE_CUSTOM_GROUP = QtCore.Qt.UserRole + 2   # bool – True for custom groups
+ROLE_TINT         = QtCore.Qt.UserRole + 3   # int  – tint level (see TINT_*)
+
+TINT_NONE = 0
+TINT_SOME = 1
+TINT_ALL  = 2
+
+
+# ---------------------------------------------------------------------------
 #   Delegate that tints group headers based on child selection state
 # ---------------------------------------------------------------------------
 
@@ -64,19 +77,13 @@ class _GroupTintDelegate(QtWidgets.QStyledItemDelegate):
     COLOR_SOME = QtGui.QColor(70, 120, 180, 90)   # dim blue
     COLOR_ALL  = QtGui.QColor(90, 150, 220, 140)   # brighter blue
 
-    # Tint level stored on each group header via UserRole+3
-    _TINT_ROLE = QtCore.Qt.UserRole + 3
-    TINT_NONE = 0
-    TINT_SOME = 1
-    TINT_ALL  = 2
-
     def paint(self, painter, option, index):
         item = self.parent().itemFromIndex(index)
-        if item and item.data(0, QtCore.Qt.UserRole + 1):
-            tint = item.data(0, self._TINT_ROLE)
-            if tint == self.TINT_ALL:
+        if item and item.data(0, ROLE_IS_GROUP):
+            tint = item.data(0, ROLE_TINT)
+            if tint == TINT_ALL:
                 color = self.COLOR_ALL
-            elif tint == self.TINT_SOME:
+            elif tint == TINT_SOME:
                 color = self.COLOR_SOME
             else:
                 color = None
@@ -122,6 +129,41 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         self.setIndentation(16)
         self.setItemDelegate(_GroupTintDelegate(self))
 
+    # -- public API (used by SelectorTool) ---------------------------------
+
+    def set_sync_callback(self, callback):
+        """Set the callback invoked when paint-select changes the selection."""
+        self._sync_callback = callback
+
+    def invalidate_anchor(self):
+        """Clear the cached anchor item ref (call before rebuilding the tree)."""
+        self._anchor_item = None
+
+    def clear_key_index(self):
+        """Clear the key→items lookup (call before rebuilding the tree)."""
+        self._key_to_items.clear()
+
+    def register_leaf(self, item):
+        """Register a leaf item in the key→items lookup for O(1) sync."""
+        key = self._item_key(item)
+        if key:
+            self._key_to_items.setdefault(key, []).append(item)
+
+    @property
+    def key_to_items(self):
+        """Read-only access to the {long_name: [items]} index."""
+        return self._key_to_items
+
+    @property
+    def is_handling_input(self):
+        """True while the tree is processing its own mouse interaction."""
+        return self._handled
+
+    def update_group_tints(self):
+        """Recompute cached tint levels for all group headers, then repaint."""
+        self._recompute_tints()
+        self.viewport().update()
+
     # -- events ------------------------------------------------------------
 
     def mousePressEvent(self, event):
@@ -136,11 +178,11 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                     self.clearSelection()
                 if self._sync_callback:
                     self._sync_callback([])
-                self._update_group_tints()
+                self.update_group_tints()
                 return
 
             # --- group header: select/toggle children ---
-            if item.data(0, QtCore.Qt.UserRole + 1):
+            if item.data(0, ROLE_IS_GROUP):
                 # Let clicks on the expand/collapse arrow pass through to Qt
                 item_rect = self.visualItemRect(item)
                 arrow_width = self.indentation()
@@ -190,7 +232,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
                         leaf.setSelected(bool(key and key in selected_keys_set))
                 if self._sync_callback:
                     self._sync_callback(list(selected_keys_set))
-                self._update_group_tints()
+                self.update_group_tints()
                 return
 
             # --- leaf item ---
@@ -240,7 +282,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
     def mouseMoveEvent(self, event):
         if self._painting:
             item = self.itemAt(event.pos())
-            if item and not item.data(0, QtCore.Qt.UserRole + 1):
+            if item and not item.data(0, ROLE_IS_GROUP):
                 self._apply_range(item)
             return
         if self._handled:
@@ -261,42 +303,30 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
 
     # -- helpers -----------------------------------------------------------
 
-    def _register_leaf(self, item):
-        """Register a leaf item in the key→items lookup for O(1) sync."""
-        key = self._item_key(item)
-        if key:
-            self._key_to_items.setdefault(key, []).append(item)
-
-    def _clear_key_index(self):
-        """Clear the key→items lookup (call before rebuilding the tree)."""
-        self._key_to_items.clear()
-
-    def _update_group_tints(self):
-        """Recompute cached tint levels for all group headers, then repaint."""
-        tint_role = _GroupTintDelegate._TINT_ROLE
+    def _recompute_tints(self):
+        """Recompute cached tint levels for all group headers."""
         for i in range(self.topLevelItemCount()):
             group = self.topLevelItem(i)
-            if not group.data(0, QtCore.Qt.UserRole + 1):
+            if not group.data(0, ROLE_IS_GROUP):
                 continue
             child_count = group.childCount()
             if not child_count:
-                group.setData(0, tint_role, _GroupTintDelegate.TINT_NONE)
+                group.setData(0, ROLE_TINT, TINT_NONE)
                 continue
             selected = sum(
                 1 for c in range(child_count) if group.child(c).isSelected()
             )
             if selected == child_count:
-                group.setData(0, tint_role, _GroupTintDelegate.TINT_ALL)
+                group.setData(0, ROLE_TINT, TINT_ALL)
             elif selected > 0:
-                group.setData(0, tint_role, _GroupTintDelegate.TINT_SOME)
+                group.setData(0, ROLE_TINT, TINT_SOME)
             else:
-                group.setData(0, tint_role, _GroupTintDelegate.TINT_NONE)
-        self.viewport().update()
+                group.setData(0, ROLE_TINT, TINT_NONE)
 
     @staticmethod
     def _item_key(item):
         """Return the long name stored on *item* (used as a stable identity)."""
-        return item.data(0, QtCore.Qt.UserRole)
+        return item.data(0, ROLE_LONG_NAME)
 
     def _leaf_items(self):
         """Return all visible non-group items in visual order."""
@@ -306,7 +336,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         )
         while iterator.value():
             item = iterator.value()
-            if not item.data(0, QtCore.Qt.UserRole + 1):
+            if not item.data(0, ROLE_IS_GROUP):
                 items.append(item)
             iterator += 1
         return items
@@ -382,7 +412,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
 
         if self._sync_callback:
             self._sync_callback(list(selected_keys_set))
-        self._update_group_tints()
+        self.update_group_tints()
 
 
 # ---------------------------------------------------------------------------
@@ -401,20 +431,12 @@ class SelectorTool(WorkspaceToolBase):
     def __init__(self, parent=None):
         self._syncing = False  # guard against selection-sync loops
         self._script_jobs = []
+        self._cached_collapsed = set()  # in-memory collapsed state
         super().__init__(parent)
 
     # ── UI ────────────────────────────────────────────────────────────────
 
     def build_ui(self):
-        # --- menu bar ---
-        menu_bar = QtWidgets.QMenuBar(self)
-        options_menu = menu_bar.addMenu("Options")
-        self._show_second_action = options_menu.addAction("Show Second List")
-        self._show_second_action.setCheckable(True)
-        self._show_second_action.setChecked(self._pref_bool("showSecondList"))
-        self._show_second_action.toggled.connect(self._toggle_second_list)
-        self.main_layout.setMenuBar(menu_bar)
-
         # --- type filter ---
         self.filter_edit = QtWidgets.QLineEdit()
         self.filter_edit.setPlaceholderText("Filter types  (e.g. transform | -camera)")
@@ -433,7 +455,7 @@ class SelectorTool(WorkspaceToolBase):
 
         # --- tree ---
         self.tree = _PaintSelectTree()
-        self.tree._sync_callback = self._apply_maya_selection
+        self.tree.set_sync_callback(self._apply_maya_selection)
         self.tree.paintSelectStarted.connect(self._open_undo_chunk)
         self.tree.paintSelectFinished.connect(self._close_undo_chunk)
         self.tree.itemExpanded.connect(self._on_group_expanded)
@@ -441,20 +463,6 @@ class SelectorTool(WorkspaceToolBase):
         self.tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         self.main_layout.addWidget(self.tree)
-
-        # --- second filter + tree (hidden by default) ---
-        show_second = self._pref_bool("showSecondList")
-        self.filter_edit2 = QtWidgets.QLineEdit()
-        self.filter_edit2.setPlaceholderText("Filter types  (e.g. joint | transform)")
-        self.filter_edit2.setClearButtonEnabled(True)
-        self.filter_edit2.setText(self._pref_string("filter2"))
-        self.filter_edit2.setVisible(show_second)
-        self.filter_edit2.textChanged.connect(lambda t: self._set_pref("filter2", t))
-        self.main_layout.addWidget(self.filter_edit2)
-
-        self.tree2 = _PaintSelectTree()
-        self.tree2.setVisible(show_second)
-        self.main_layout.addWidget(self.tree2)
 
         # --- status bar ---
         _status_style = "color: grey; font-size: 10px; padding: 2px;"
@@ -474,6 +482,12 @@ class SelectorTool(WorkspaceToolBase):
             QTreeWidget::item { padding: 1px 0px; }
         """)
 
+        # Debounce timer for collapsed-state writes (avoids disk I/O per click)
+        self._collapse_save_timer = QtCore.QTimer(self)
+        self._collapse_save_timer.setSingleShot(True)
+        self._collapse_save_timer.setInterval(500)
+        self._collapse_save_timer.timeout.connect(self._flush_collapsed_groups)
+
         # Defer scene queries and scriptJobs until the workspaceControl
         # is fully initialised (avoids errors during __init__).
         cmds.evalDeferred(self._deferred_init)
@@ -485,27 +499,29 @@ class SelectorTool(WorkspaceToolBase):
         self._refresh()
         self._install_script_jobs()
 
-    # ── Options / preferences ────────────────────────────────────────────
-
-    def _toggle_second_list(self, checked):
-        self._set_pref("showSecondList", checked)
-        self.filter_edit2.setVisible(checked)
-        self.tree2.setVisible(checked)
-
     # ── Filter helpers ────────────────────────────────────────────────────
 
     def _restart_filter_timer(self):
         self._filter_timer.start()
 
-    @staticmethod
-    def _resolve_types(token):
+    _all_node_types_cache = None  # class-level cache; stable within a session
+
+    @classmethod
+    def _all_node_types(cls):
+        """Return the cached list of all Maya node types."""
+        if cls._all_node_types_cache is None:
+            cls._all_node_types_cache = cmds.allNodeTypes() or []
+        return cls._all_node_types_cache
+
+    @classmethod
+    def _resolve_types(cls, token):
         """Resolve a user token to a list of Maya node types.
 
         Exact matches are returned directly.  If no exact match exists,
         all registered node types whose name contains *token* (case-
         insensitive) are returned — e.g. ``cam`` → ``[camera, ...]``.
         """
-        all_types = cmds.allNodeTypes() or []
+        all_types = cls._all_node_types()
         # Exact match (case-sensitive, as Maya types are)
         if token in all_types:
             return [token]
@@ -574,15 +590,16 @@ class SelectorTool(WorkspaceToolBase):
         }
 
     def _load_collapsed_groups(self):
-        """Return set of group names that should be collapsed."""
+        """Load collapsed state from disk into the in-memory cache and return it."""
         cfg = self._migrate_scene_config(self._load_scene_config())
-        return set(cfg.get(self._CFG_COLLAPSED, []))
+        self._cached_collapsed = set(cfg.get(self._CFG_COLLAPSED, []))
+        return self._cached_collapsed
 
-    def _save_collapsed_groups(self, collapsed):
-        """Persist the set of collapsed group names."""
+    def _flush_collapsed_groups(self):
+        """Write the in-memory collapsed set to disk (called by debounce timer)."""
         cfg = self._migrate_scene_config(self._load_scene_config())
-        if collapsed:
-            cfg[self._CFG_COLLAPSED] = sorted(collapsed)
+        if self._cached_collapsed:
+            cfg[self._CFG_COLLAPSED] = sorted(self._cached_collapsed)
         else:
             cfg.pop(self._CFG_COLLAPSED, None)
         self._save_scene_config(cfg)
@@ -615,22 +632,22 @@ class SelectorTool(WorkspaceToolBase):
 
     # ── Tree-item factories ─────────────────────────────────────────────
 
-    _CUSTOM_GROUP_ROLE = QtCore.Qt.UserRole + 2  # True for custom groups
+    _CUSTOM_GROUP_ROLE = ROLE_CUSTOM_GROUP
 
     @staticmethod
     def _make_leaf_item(long_name):
         """Create a leaf QTreeWidgetItem for a scene node."""
         short = long_name.rsplit("|", 1)[-1]
         item = QtWidgets.QTreeWidgetItem([short])
-        item.setData(0, QtCore.Qt.UserRole, long_name)
-        item.setData(0, QtCore.Qt.UserRole + 1, False)
+        item.setData(0, ROLE_LONG_NAME, long_name)
+        item.setData(0, ROLE_IS_GROUP, False)
         return item
 
     @classmethod
     def _make_group_header(cls, label, is_custom=False):
         """Create a bold group-header QTreeWidgetItem."""
         item = QtWidgets.QTreeWidgetItem([label])
-        item.setData(0, QtCore.Qt.UserRole + 1, True)  # is_group flag
+        item.setData(0, ROLE_IS_GROUP, True)
         item.setData(0, cls._CUSTOM_GROUP_ROLE, is_custom)
         font = item.font(0)
         font.setBold(True)
@@ -639,147 +656,157 @@ class SelectorTool(WorkspaceToolBase):
 
     # ── Scene query & tree build ──────────────────────────────────────────
 
+    def _query_matching_nodes(self):
+        """Query the scene and return the set of long-names that pass the filter.
+
+        Returns ``None`` if the filter is empty (caller should show a placeholder).
+        """
+        include, exclude, show_shapes = self._parsed_types()
+        if not include:
+            return None
+
+        raw_matches = set()
+        for t in include:
+            try:
+                raw_matches.update(cmds.ls(type=t, long=True) or [])
+            except RuntimeError:
+                pass  # invalid type name — skip
+        for t in exclude:
+            try:
+                raw_matches -= set(cmds.ls(type=t, long=True) or [])
+            except RuntimeError:
+                pass
+
+        # Resolve shape nodes to their transform parents.
+        matching = set()
+        for node in raw_matches:
+            is_shape = False
+            try:
+                is_shape = cmds.objectType(node, isAType="shape")
+            except RuntimeError:
+                pass
+            if is_shape:
+                parent = cmds.listRelatives(node, parent=True, fullPath=True)
+                if parent:
+                    matching.add(parent[0])
+                if show_shapes:
+                    matching.add(node)
+            else:
+                matching.add(node)
+        return matching
+
+    def _populate_tree(self, matching):
+        """Build tree groups from *matching* long-names.  Returns item count."""
+        custom_groups = self._load_custom_groups()
+        collapsed = self._cached_collapsed
+        assigned = set()
+        item_count = 0
+
+        # Custom groups (take priority)
+        for grp_name in sorted(custom_groups):
+            nodes = [n for n in custom_groups[grp_name] if n in matching]
+            if not nodes:
+                continue
+            nodes.sort(key=lambda n: n.rsplit("|", 1)[-1])
+            assigned.update(nodes)
+            group_item = self._make_group_header(grp_name, is_custom=True)
+            self.tree.addTopLevelItem(group_item)
+            for long_name in nodes:
+                leaf = self._make_leaf_item(long_name)
+                group_item.addChild(leaf)
+                self.tree.register_leaf(leaf)
+                item_count += 1
+            group_item.setExpanded(grp_name not in collapsed)
+
+        # Selection-set groups (for remaining items)
+        remaining = matching - assigned
+        all_sets = cmds.ls(type="objectSet") or []
+        default_sets = {
+            "defaultLightSet", "defaultObjectSet",
+            "initialParticleSE", "initialShadingGroup",
+        }
+        user_sets = [
+            s for s in all_sets
+            if s not in default_sets
+            and not cmds.objectType(s, isAType="shadingEngine")
+        ]
+        for s in sorted(user_sets):
+            members = cmds.sets(s, q=True, nodesOnly=True) or []
+            long_members = []
+            for m in members:
+                long_members.extend(cmds.ls(m, long=True) or [])
+            group_nodes = sorted(
+                [n for n in long_members if n in remaining],
+                key=lambda n: n.rsplit("|", 1)[-1],
+            )
+            if not group_nodes:
+                continue
+            assigned.update(group_nodes)
+            group_item = self._make_group_header(s, is_custom=False)
+            self.tree.addTopLevelItem(group_item)
+            for long_name in group_nodes:
+                leaf = self._make_leaf_item(long_name)
+                group_item.addChild(leaf)
+                self.tree.register_leaf(leaf)
+                item_count += 1
+            group_item.setExpanded(s not in collapsed)
+
+        # Ungrouped section
+        ungrouped = sorted(
+            matching - assigned,
+            key=lambda n: n.rsplit("|", 1)[-1],
+        )
+        if ungrouped:
+            ug_item = self._make_group_header(self.UNGROUPED_LABEL, is_custom=False)
+            self.tree.addTopLevelItem(ug_item)
+            for long_name in ungrouped:
+                leaf = self._make_leaf_item(long_name)
+                ug_item.addChild(leaf)
+                self.tree.register_leaf(leaf)
+                item_count += 1
+            ug_item.setExpanded(self.UNGROUPED_LABEL not in collapsed)
+
+        return item_count
+
+    def _restore_tree_selection(self, prev_sel):
+        """Re-select tree items whose long-names are in *prev_sel*."""
+        if not prev_sel:
+            return
+        with _signals_blocked(self.tree):
+            for long_name, items in self.tree.key_to_items.items():
+                if long_name in prev_sel:
+                    for item in items:
+                        item.setSelected(True)
+        self.tree.update_group_tints()
+        self._update_sel_count()
+
     def _refresh(self):
         """Re-scan the scene and rebuild the tree."""
         if not isValid(self):
             return
         self._filter_timer.stop()
 
-        # Snapshot Maya selection before clearing so we can restore highlights.
         prev_sel = set(cmds.ls(selection=True, long=True) or [])
 
         self._syncing = True
         try:
-            self.tree._anchor_item = None  # invalidate; _find_anchor will re-resolve from key
-            self.tree._clear_key_index()
+            self.tree.invalidate_anchor()
+            self.tree.clear_key_index()
             with _signals_blocked(self.tree):
                 self.tree.clear()
 
-            include, exclude, show_shapes = self._parsed_types()
-            if not include:
+            matching = self._query_matching_nodes()
+            if matching is None:
                 self.status_label.setText("Enter a type to filter")
                 return
-
-            # Gather all matching nodes
-            raw_matches = set()
-            for t in include:
-                try:
-                    raw_matches.update(cmds.ls(type=t, long=True) or [])
-                except RuntimeError:
-                    pass  # invalid type name — skip
-
-            # Subtract excluded types
-            for t in exclude:
-                try:
-                    raw_matches -= set(cmds.ls(type=t, long=True) or [])
-                except RuntimeError:
-                    pass
-
-            # Resolve shape nodes to their transform parents.
-            # If 'shape' token is present, keep shape nodes too.
-            matching = set()
-            for node in raw_matches:
-                node_type = cmds.nodeType(node)
-                is_shape = False
-                try:
-                    is_shape = cmds.objectType(node, isAType="shape")
-                except RuntimeError:
-                    pass
-                if is_shape:
-                    parent = cmds.listRelatives(node, parent=True, fullPath=True)
-                    if parent:
-                        matching.add(parent[0])
-                    if show_shapes:
-                        matching.add(node)
-                else:
-                    matching.add(node)
-
             if not matching:
                 self.status_label.setText("0 items")
                 return
 
-            # ---- Custom groups (take priority) ----
-            custom_groups = self._load_custom_groups()
-            collapsed = self._load_collapsed_groups()
-            assigned = set()
-
-            item_count = 0
-
-            for grp_name in sorted(custom_groups):
-                nodes = [n for n in custom_groups[grp_name] if n in matching]
-                if not nodes:
-                    continue
-                nodes.sort(key=lambda n: n.rsplit("|", 1)[-1])
-                assigned.update(nodes)
-                group_item = self._make_group_header(grp_name, is_custom=True)
-                self.tree.addTopLevelItem(group_item)
-                for long_name in nodes:
-                    leaf = self._make_leaf_item(long_name)
-                    group_item.addChild(leaf)
-                    self.tree._register_leaf(leaf)
-                    item_count += 1
-                group_item.setExpanded(grp_name not in collapsed)
-
-            # ---- Selection-set groups (for remaining items) ----
-            remaining = matching - assigned
-            all_sets = cmds.ls(type="objectSet") or []
-            default_sets = {
-                "defaultLightSet", "defaultObjectSet",
-                "initialParticleSE", "initialShadingGroup",
-            }
-            user_sets = [
-                s for s in all_sets
-                if s not in default_sets
-                and not cmds.objectType(s, isAType="shadingEngine")
-            ]
-
-            for s in sorted(user_sets):
-                members = cmds.sets(s, q=True, nodesOnly=True) or []
-                long_members = []
-                for m in members:
-                    long_members.extend(cmds.ls(m, long=True) or [])
-                group_nodes = sorted(
-                    [n for n in long_members if n in remaining],
-                    key=lambda n: n.rsplit("|", 1)[-1],
-                )
-                if not group_nodes:
-                    continue
-                assigned.update(group_nodes)
-                group_item = self._make_group_header(s, is_custom=False)
-                self.tree.addTopLevelItem(group_item)
-                for long_name in group_nodes:
-                    leaf = self._make_leaf_item(long_name)
-                    group_item.addChild(leaf)
-                    self.tree._register_leaf(leaf)
-                    item_count += 1
-                group_item.setExpanded(s not in collapsed)
-
-            # ---- Ungrouped section ----
-            ungrouped = sorted(
-                matching - assigned,
-                key=lambda n: n.rsplit("|", 1)[-1],
-            )
-            if ungrouped:
-                ug_item = self._make_group_header(self.UNGROUPED_LABEL, is_custom=False)
-                self.tree.addTopLevelItem(ug_item)
-                for long_name in ungrouped:
-                    leaf = self._make_leaf_item(long_name)
-                    ug_item.addChild(leaf)
-                    self.tree._register_leaf(leaf)
-                    item_count += 1
-                ug_item.setExpanded(self.UNGROUPED_LABEL not in collapsed)
-
+            self._load_collapsed_groups()  # refresh in-memory cache from disk
+            item_count = self._populate_tree(matching)
             self.status_label.setText(f"{item_count} items")
-
-            # Restore selection highlight from snapshot taken before clear.
-            if prev_sel:
-                with _signals_blocked(self.tree):
-                    for long_name, items in self.tree._key_to_items.items():
-                        if long_name in prev_sel:
-                            for item in items:
-                                item.setSelected(True)
-                self.tree._update_group_tints()
-                self._update_sel_count()
+            self._restore_tree_selection(prev_sel)
         finally:
             self._syncing = False
 
@@ -792,12 +819,12 @@ class SelectorTool(WorkspaceToolBase):
 
         selected_leaves = [
             it for it in self.tree.selectedItems()
-            if not it.data(0, QtCore.Qt.UserRole + 1)
+            if not it.data(0, ROLE_IS_GROUP)
         ]
         custom_groups = self._load_custom_groups()
 
         # --- Actions on a custom group header ---
-        if item and item.data(0, QtCore.Qt.UserRole + 1) and item.data(0, self._CUSTOM_GROUP_ROLE):
+        if item and item.data(0, ROLE_IS_GROUP) and item.data(0, self._CUSTOM_GROUP_ROLE):
             grp_name = item.text(0)
             menu.addAction("Rename Group\u2026", lambda: self._rename_group(grp_name))
             menu.addAction("Delete Group", lambda: self._delete_group(grp_name))
@@ -845,7 +872,7 @@ class SelectorTool(WorkspaceToolBase):
             return
         long_names = []
         for it in selected_leaves:
-            ln = it.data(0, QtCore.Qt.UserRole)
+            ln = it.data(0, ROLE_LONG_NAME)
             if ln:
                 long_names.append(ln)
         groups[name] = long_names
@@ -857,7 +884,7 @@ class SelectorTool(WorkspaceToolBase):
         groups = self._load_custom_groups()
         existing = set(groups.get(group_name, []))
         for it in selected_leaves:
-            ln = it.data(0, QtCore.Qt.UserRole)
+            ln = it.data(0, ROLE_LONG_NAME)
             if ln:
                 existing.add(ln)
         groups[group_name] = list(existing)
@@ -869,7 +896,7 @@ class SelectorTool(WorkspaceToolBase):
         groups = self._load_custom_groups()
         to_remove = set()
         for it in selected_leaves:
-            ln = it.data(0, QtCore.Qt.UserRole)
+            ln = it.data(0, ROLE_LONG_NAME)
             if ln:
                 to_remove.add(ln)
         for name in list(groups):
@@ -911,16 +938,14 @@ class SelectorTool(WorkspaceToolBase):
     # ── Group click → select all children ─────────────────────────────────
 
     def _on_group_expanded(self, item):
-        if item.data(0, QtCore.Qt.UserRole + 1):
-            collapsed = self._load_collapsed_groups()
-            collapsed.discard(item.text(0))
-            self._save_collapsed_groups(collapsed)
+        if item.data(0, ROLE_IS_GROUP):
+            self._cached_collapsed.discard(item.text(0))
+            self._collapse_save_timer.start()
 
     def _on_group_collapsed(self, item):
-        if item.data(0, QtCore.Qt.UserRole + 1):
-            collapsed = self._load_collapsed_groups()
-            collapsed.add(item.text(0))
-            self._save_collapsed_groups(collapsed)
+        if item.data(0, ROLE_IS_GROUP):
+            self._cached_collapsed.add(item.text(0))
+            self._collapse_save_timer.start()
 
     # ── Undo chunk for paint-select ──────────────────────────────────────
 
@@ -939,7 +964,7 @@ class SelectorTool(WorkspaceToolBase):
     def _update_sel_count(self):
         """Update the selected-count label from the tree's current selection."""
         n = sum(
-            1 for key, items in self.tree._key_to_items.items()
+            1 for key, items in self.tree.key_to_items.items()
             if any(it.isSelected() for it in items)
         )
         self.sel_count_label.setText(f"{n} selected" if n else "")
@@ -973,11 +998,11 @@ class SelectorTool(WorkspaceToolBase):
             log.debug("_sync_from_viewport: %d items from Maya", len(sel))
             with _signals_blocked(self.tree):
                 self.tree.clearSelection()
-                for long_name, items in self.tree._key_to_items.items():
+                for long_name, items in self.tree.key_to_items.items():
                     if long_name in sel:
                         for item in items:
                             item.setSelected(True)
-            self.tree._update_group_tints()
+            self.tree.update_group_tints()
             self._update_sel_count()
         finally:
             self._syncing = False
@@ -987,7 +1012,7 @@ class SelectorTool(WorkspaceToolBase):
         if self._syncing:
             return
         # Don't let Maya override tree selection while we own the interaction
-        if self.tree._handled:
+        if self.tree.is_handling_input:
             log.debug("_on_viewport_selection_changed: suppressed (tree._handled)")
             return
         self._sync_from_viewport()
@@ -1021,6 +1046,10 @@ class SelectorTool(WorkspaceToolBase):
     # ── Cleanup ───────────────────────────────────────────────────────────
 
     def closeEvent(self, event):
+        # Flush any pending debounced config writes
+        if self._collapse_save_timer.isActive():
+            self._collapse_save_timer.stop()
+            self._flush_collapsed_groups()
         for job_id in self._script_jobs:
             try:
                 if cmds.scriptJob(exists=job_id):
