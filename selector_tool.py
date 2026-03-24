@@ -557,6 +557,42 @@ class SelectorTool(WorkspaceToolBase):
     # ── UI ────────────────────────────────────────────────────────────────
 
     def build_ui(self):
+        # --- group-visibility toggles ---
+        toggle_layout = QtWidgets.QHBoxLayout()
+        toggle_layout.setContentsMargins(0, 0, 0, 0)
+        toggle_layout.setSpacing(4)
+
+        self._btn_custom_groups = QtWidgets.QPushButton("Custom Groups")
+        self._btn_custom_groups.setCheckable(True)
+        self._btn_custom_groups.setChecked(
+            self._pref_string("show_custom_groups") != "0"  # on by default
+        )
+        self._btn_custom_groups.toggled.connect(self._on_toggle_groups)
+
+        self._btn_sel_sets = QtWidgets.QPushButton("Selection Sets")
+        self._btn_sel_sets.setCheckable(True)
+        self._btn_sel_sets.setChecked(
+            self._pref_string("show_sel_sets") == "1"  # off by default
+        )
+        self._btn_sel_sets.toggled.connect(self._on_toggle_groups)
+
+        _toggle_style = """
+            QPushButton {
+                font-size: 10px; padding: 2px 8px;
+                border: 1px solid #555; border-radius: 3px;
+            }
+            QPushButton:checked {
+                background: #4a6a8a; color: #ddd;
+            }
+        """
+        self._btn_custom_groups.setStyleSheet(_toggle_style)
+        self._btn_sel_sets.setStyleSheet(_toggle_style)
+
+        toggle_layout.addWidget(self._btn_custom_groups)
+        toggle_layout.addWidget(self._btn_sel_sets)
+        toggle_layout.addStretch()
+        self.main_layout.addLayout(toggle_layout)
+
         # --- type filter ---
         self.filter_edit = QtWidgets.QLineEdit()
         self.filter_edit.setPlaceholderText("Filter types  (e.g. transform | -camera)")
@@ -619,6 +655,20 @@ class SelectorTool(WorkspaceToolBase):
             return
         self._refresh()
         self._install_script_jobs()
+
+    # ── Group-visibility toggles ─────────────────────────────────────────
+
+    def _on_toggle_groups(self):
+        """Persist toggle state and rebuild the tree."""
+        self._set_pref(
+            "show_custom_groups",
+            "1" if self._btn_custom_groups.isChecked() else "0",
+        )
+        self._set_pref(
+            "show_sel_sets",
+            "1" if self._btn_sel_sets.isChecked() else "0",
+        )
+        self._refresh()
 
     # ── Filter helpers ────────────────────────────────────────────────────
 
@@ -820,11 +870,15 @@ class SelectorTool(WorkspaceToolBase):
         """Build tree groups from *matching* long-names.  Returns item count."""
         custom_groups = self._load_custom_groups()
         collapsed = self._cached_collapsed
+        show_custom = self._btn_custom_groups.isChecked()
+        show_sets = self._btn_sel_sets.isChecked()
         assigned = set()
         item_count = 0
 
         # Custom groups (take priority)
         for grp_name in sorted(custom_groups):
+            if not show_custom:
+                break
             nodes = [n for n in custom_groups[grp_name] if n in matching]
             if not nodes:
                 continue
@@ -841,7 +895,7 @@ class SelectorTool(WorkspaceToolBase):
 
         # Selection-set groups (for remaining items)
         remaining = matching - assigned
-        all_sets = cmds.ls(type="objectSet") or []
+        all_sets = (cmds.ls(type="objectSet") or []) if show_sets else []
         default_sets = {
             "defaultLightSet", "defaultObjectSet",
             "initialParticleSE", "initialShadingGroup",
