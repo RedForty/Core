@@ -21,6 +21,7 @@ import logging
 from contextlib import contextmanager
 
 import maya.cmds as cmds
+import maya.api.OpenMaya as om2
 
 try:
     from PySide2 import QtWidgets, QtCore, QtGui
@@ -52,6 +53,7 @@ ROLE_LONG_NAME    = QtCore.Qt.UserRole       # str  – DAG long name
 ROLE_IS_GROUP     = QtCore.Qt.UserRole + 1   # bool – True for group headers
 ROLE_CUSTOM_GROUP = QtCore.Qt.UserRole + 2   # bool – True for custom groups
 ROLE_TINT         = QtCore.Qt.UserRole + 3   # int  – tint level (see TINT_*)
+ROLE_DELETED      = QtCore.Qt.UserRole + 4   # bool – True if node deleted from scene
 
 TINT_NONE = 0
 TINT_SOME = 1
@@ -70,16 +72,48 @@ class _GroupTintDelegate(QtWidgets.QStyledItemDelegate):
       - some children selected → dim blue
       - all children selected  → brighter blue
 
+    Deleted items get a dull red background, dimmed/strikethrough text,
+    and a small "clear" button on the right side.
+
     Tint levels are cached per group header and only recomputed when
     _update_group_tints() is called on the tree, not on every repaint.
     """
 
-    COLOR_SOME = QtGui.QColor(70, 120, 180, 90)   # dim blue
-    COLOR_ALL  = QtGui.QColor(90, 150, 220, 140)   # brighter blue
+    COLOR_SOME    = QtGui.QColor(70, 120, 180, 90)    # dim blue
+    COLOR_ALL     = QtGui.QColor(90, 150, 220, 140)    # brighter blue
+    COLOR_DELETED = QtGui.QColor(180, 70, 70, 90)      # dull red
+    COLOR_DEL_TXT = QtGui.QColor(160, 80, 80)           # dimmed red text
+    COLOR_DEL_BTN = QtGui.QColor(180, 70, 70, 60)       # clear button bg
+
+    CLEAR_BTN_W = 36
+    CLEAR_BTN_H = 16
+    CLEAR_BTN_MARGIN = 4
+
+    @staticmethod
+    def clear_btn_rect(item_rect):
+        """Return the QRect for the clear button within *item_rect*."""
+        w = _GroupTintDelegate.CLEAR_BTN_W
+        h = _GroupTintDelegate.CLEAR_BTN_H
+        m = _GroupTintDelegate.CLEAR_BTN_MARGIN
+        x = item_rect.right() - w - m
+        y = item_rect.center().y() - h // 2
+        return QtCore.QRect(x, y, w, h)
 
     def paint(self, painter, option, index):
         item = self.parent().itemFromIndex(index)
-        if item and item.data(0, ROLE_IS_GROUP):
+        if not item:
+            super().paint(painter, option, index)
+            return
+
+        is_deleted = item.data(0, ROLE_DELETED)
+        is_group = item.data(0, ROLE_IS_GROUP)
+
+        # --- background tint ---
+        if is_deleted:
+            painter.save()
+            painter.fillRect(option.rect, self.COLOR_DELETED)
+            painter.restore()
+        elif is_group:
             tint = item.data(0, ROLE_TINT)
             if tint == TINT_ALL:
                 color = self.COLOR_ALL
@@ -87,13 +121,50 @@ class _GroupTintDelegate(QtWidgets.QStyledItemDelegate):
                 color = self.COLOR_SOME
             else:
                 color = None
-
             if color:
                 painter.save()
                 painter.fillRect(option.rect, color)
                 painter.restore()
 
-        super().paint(painter, option, index)
+        # --- text (dimmed for deleted items) ---
+        if is_deleted:
+            opt = QtWidgets.QStyleOptionViewItem(option)
+            opt.palette.setColor(QtGui.QPalette.Text, self.COLOR_DEL_TXT)
+            opt.palette.setColor(QtGui.QPalette.HighlightedText, self.COLOR_DEL_TXT)
+            super().paint(painter, opt, index)
+        else:
+            super().paint(painter, option, index)
+
+        if not is_deleted:
+            return
+
+        # --- strikethrough line for deleted leaves ---
+        if not is_group:
+            painter.save()
+            pen = QtGui.QPen(self.COLOR_DEL_TXT)
+            pen.setWidth(1)
+            painter.setPen(pen)
+            rect = option.rect
+            y = rect.center().y()
+            painter.drawLine(
+                rect.left() + 4, y,
+                rect.right() - self.CLEAR_BTN_W - self.CLEAR_BTN_MARGIN * 2, y,
+            )
+            painter.restore()
+
+        # --- "clear" button ---
+        btn_rect = self.clear_btn_rect(option.rect)
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(self.COLOR_DEL_BTN)
+        painter.drawRoundedRect(btn_rect, 3, 3)
+        painter.setPen(self.COLOR_DEL_TXT)
+        font = painter.font()
+        font.setPointSize(max(font.pointSize() - 1, 7))
+        painter.setFont(font)
+        painter.drawText(btn_rect, QtCore.Qt.AlignCenter, "clear")
+        painter.restore()
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +192,7 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         self._handled = False  # True when we handled press ourselves
         self._sync_callback = None  # set by SelectorTool for tree→Maya sync
         self._key_to_items = {}  # {long_name: [items]} for O(1) lookup
+        self._clear_callback = None  # set by SelectorTool for clearing deleted items
         self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.setDragEnabled(False)
         self.setAcceptDrops(False)
@@ -134,6 +206,10 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
     def set_sync_callback(self, callback):
         """Set the callback invoked when paint-select changes the selection."""
         self._sync_callback = callback
+
+    def set_clear_callback(self, callback):
+        """Set the callback invoked when a deleted item's clear button is clicked."""
+        self._clear_callback = callback
 
     def invalidate_anchor(self):
         """Clear the cached anchor item ref (call before rebuilding the tree)."""
@@ -169,6 +245,29 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.LeftButton:
             item = self.itemAt(event.pos())
+
+            # --- deleted item: only allow clear-button and expand arrow ---
+            if item and item.data(0, ROLE_DELETED):
+                self._handled = True
+                # Allow expand/collapse arrow clicks on deleted groups
+                if item.data(0, ROLE_IS_GROUP):
+                    arrow_width = self.indentation()
+                    indent_level = 0
+                    parent = item.parent()
+                    while parent:
+                        indent_level += 1
+                        parent = parent.parent()
+                    arrow_x = indent_level * arrow_width
+                    if event.pos().x() < arrow_x + arrow_width:
+                        self._handled = False
+                        super().mousePressEvent(event)
+                        return
+                # Check for clear button click
+                item_rect = self.visualItemRect(item)
+                btn_rect = _GroupTintDelegate.clear_btn_rect(item_rect)
+                if btn_rect.contains(event.pos()) and self._clear_callback:
+                    self._clear_callback(item)
+                return  # consume all other clicks on deleted items
 
             # --- empty space: clear selection ---
             if not item:
@@ -309,19 +408,39 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
             group = self.topLevelItem(i)
             if not group.data(0, ROLE_IS_GROUP):
                 continue
-            child_count = group.childCount()
-            if not child_count:
+            live_count = 0
+            selected = 0
+            for c in range(group.childCount()):
+                child = group.child(c)
+                if child.data(0, ROLE_DELETED):
+                    continue
+                live_count += 1
+                if child.isSelected():
+                    selected += 1
+            if not live_count:
                 group.setData(0, ROLE_TINT, TINT_NONE)
-                continue
-            selected = sum(
-                1 for c in range(child_count) if group.child(c).isSelected()
-            )
-            if selected == child_count:
+            elif selected == live_count:
                 group.setData(0, ROLE_TINT, TINT_ALL)
             elif selected > 0:
                 group.setData(0, ROLE_TINT, TINT_SOME)
             else:
                 group.setData(0, ROLE_TINT, TINT_NONE)
+
+    def _recompute_group_deleted(self):
+        """Mark group headers as deleted if ALL their children are deleted."""
+        for i in range(self.topLevelItemCount()):
+            group = self.topLevelItem(i)
+            if not group.data(0, ROLE_IS_GROUP):
+                continue
+            count = group.childCount()
+            if count == 0:
+                group.setData(0, ROLE_DELETED, False)
+                continue
+            all_deleted = all(
+                group.child(c).data(0, ROLE_DELETED)
+                for c in range(count)
+            )
+            group.setData(0, ROLE_DELETED, all_deleted)
 
     @staticmethod
     def _item_key(item):
@@ -329,14 +448,14 @@ class _PaintSelectTree(QtWidgets.QTreeWidget):
         return item.data(0, ROLE_LONG_NAME)
 
     def _leaf_items(self):
-        """Return all visible non-group items in visual order."""
+        """Return all visible non-group, non-deleted items in visual order."""
         items = []
         iterator = QtWidgets.QTreeWidgetItemIterator(
             self, QtWidgets.QTreeWidgetItemIterator.NoChildren
         )
         while iterator.value():
             item = iterator.value()
-            if not item.data(0, ROLE_IS_GROUP):
+            if not item.data(0, ROLE_IS_GROUP) and not item.data(0, ROLE_DELETED):
                 items.append(item)
             iterator += 1
         return items
@@ -431,6 +550,7 @@ class SelectorTool(WorkspaceToolBase):
     def __init__(self, parent=None):
         self._syncing = False  # guard against selection-sync loops
         self._script_jobs = []
+        self._om_callback_ids = []  # OpenMaya callback IDs
         self._cached_collapsed = set()  # in-memory collapsed state
         super().__init__(parent)
 
@@ -456,6 +576,7 @@ class SelectorTool(WorkspaceToolBase):
         # --- tree ---
         self.tree = _PaintSelectTree()
         self.tree.set_sync_callback(self._apply_maya_selection)
+        self.tree.set_clear_callback(self._on_clear_deleted)
         self.tree.paintSelectStarted.connect(self._open_undo_chunk)
         self.tree.paintSelectFinished.connect(self._close_undo_chunk)
         self.tree.itemExpanded.connect(self._on_group_expanded)
@@ -1001,7 +1122,8 @@ class SelectorTool(WorkspaceToolBase):
                 for long_name, items in self.tree.key_to_items.items():
                     if long_name in sel:
                         for item in items:
-                            item.setSelected(True)
+                            if not item.data(0, ROLE_DELETED):
+                                item.setSelected(True)
             self.tree.update_group_tints()
             self._update_sel_count()
         finally:
@@ -1016,6 +1138,89 @@ class SelectorTool(WorkspaceToolBase):
             log.debug("_on_viewport_selection_changed: suppressed (tree._handled)")
             return
         self._sync_from_viewport()
+
+    # ── Deleted-node handling ────────────────────────────────────────────
+
+    def _on_node_removed_cb(self, mob, client_data):
+        """OpenMaya callback — fires just before a DAG node is removed."""
+        if mob.isNull() or not mob.hasFn(om2.MFn.kDagNode):
+            return
+        try:
+            dag_fn = om2.MFnDagNode(mob)
+            long_name = dag_fn.fullPathName()
+        except Exception:
+            return
+        if long_name in self.tree.key_to_items:
+            cmds.evalDeferred(lambda ln=long_name: self._mark_deleted(ln))
+
+    def _mark_deleted(self, long_name):
+        """Mark tree items for *long_name* as deleted."""
+        if not isValid(self):
+            return
+        items = self.tree.key_to_items.get(long_name, [])
+        if not items:
+            return
+        for item in items:
+            item.setData(0, ROLE_DELETED, True)
+            item.setSelected(False)
+        self.tree._recompute_group_deleted()
+        self.tree.update_group_tints()
+
+    def _on_clear_deleted(self, item):
+        """Clear-button callback: remove a deleted item (or group's deleted children) from the UI."""
+        if item.data(0, ROLE_IS_GROUP):
+            # Remove all deleted children from this group
+            for i in range(item.childCount() - 1, -1, -1):
+                child = item.child(i)
+                if child.data(0, ROLE_DELETED):
+                    self._remove_item_from_tree(child)
+            # Remove the group header if it is now empty
+            if item.childCount() == 0:
+                idx = self.tree.indexOfTopLevelItem(item)
+                if idx >= 0:
+                    self.tree.takeTopLevelItem(idx)
+        else:
+            parent = item.parent()
+            self._remove_item_from_tree(item)
+            # Remove parent group if now empty
+            if parent and parent.data(0, ROLE_IS_GROUP) and parent.childCount() == 0:
+                idx = self.tree.indexOfTopLevelItem(parent)
+                if idx >= 0:
+                    self.tree.takeTopLevelItem(idx)
+        self.tree._recompute_group_deleted()
+        self.tree.viewport().update()
+        self._update_status_counts()
+
+    def _remove_item_from_tree(self, item):
+        """Remove a single leaf item from the tree and key index."""
+        key = item.data(0, ROLE_LONG_NAME)
+        parent = item.parent()
+        if parent:
+            parent.removeChild(item)
+        else:
+            idx = self.tree.indexOfTopLevelItem(item)
+            if idx >= 0:
+                self.tree.takeTopLevelItem(idx)
+        if key and key in self.tree.key_to_items:
+            self.tree.key_to_items[key] = [
+                i for i in self.tree.key_to_items[key] if i is not item
+            ]
+            if not self.tree.key_to_items[key]:
+                del self.tree.key_to_items[key]
+
+    def _update_status_counts(self):
+        """Recount live items and update both status labels."""
+        total = 0
+        for i in range(self.tree.topLevelItemCount()):
+            group = self.tree.topLevelItem(i)
+            if group.data(0, ROLE_IS_GROUP):
+                for c in range(group.childCount()):
+                    if not group.child(c).data(0, ROLE_DELETED):
+                        total += 1
+            elif not group.data(0, ROLE_DELETED):
+                total += 1
+        self.status_label.setText(f"{total} items")
+        self._update_sel_count()
 
     # ── ScriptJobs ────────────────────────────────────────────────────────
 
@@ -1042,6 +1247,14 @@ class SelectorTool(WorkspaceToolBase):
                 parent=self.TOOL_NAME,
             ),
         ]
+        # OpenMaya callback for node deletion (no scriptJob equivalent)
+        try:
+            cb_id = om2.MDGMessage.addNodeRemovedCallback(
+                self._on_node_removed_cb, "dependNode"
+            )
+            self._om_callback_ids.append(cb_id)
+        except Exception:
+            log.warning("Failed to register node-removed callback")
 
     # ── Cleanup ───────────────────────────────────────────────────────────
 
@@ -1057,6 +1270,12 @@ class SelectorTool(WorkspaceToolBase):
             except RuntimeError:
                 pass
         self._script_jobs.clear()
+        for cb_id in self._om_callback_ids:
+            try:
+                om2.MMessage.removeCallback(cb_id)
+            except Exception:
+                pass
+        self._om_callback_ids.clear()
         super().closeEvent(event)
 
 
