@@ -609,6 +609,23 @@ class SelectorTool(WorkspaceToolBase):
         self.filter_edit.textChanged.connect(self._restart_filter_timer)
         self.filter_edit.textChanged.connect(lambda t: self._set_pref("filter1", t))
 
+        # --- name filter ---
+        self.name_filter_edit = QtWidgets.QLineEdit()
+        self.name_filter_edit.setPlaceholderText("Filter names  (e.g. _L_ | -settings)")
+        self.name_filter_edit.setClearButtonEnabled(True)
+        self.name_filter_edit.setText(self._pref_string("name_filter"))
+        self.name_filter_edit.returnPressed.connect(self._refresh)
+        self.main_layout.addWidget(self.name_filter_edit)
+
+        self._name_filter_timer = QtCore.QTimer(self)
+        self._name_filter_timer.setSingleShot(True)
+        self._name_filter_timer.setInterval(400)
+        self._name_filter_timer.timeout.connect(self._refresh)
+        self.name_filter_edit.textChanged.connect(self._name_filter_timer.start)
+        self.name_filter_edit.textChanged.connect(
+            lambda t: self._set_pref("name_filter", t)
+        )
+
         # --- tree ---
         self.tree = _PaintSelectTree()
         self.tree.set_sync_callback(self._apply_maya_selection)
@@ -732,6 +749,39 @@ class SelectorTool(WorkspaceToolBase):
             else:
                 include.extend(self._resolve_types(t))
         return include, exclude, show_shapes
+
+    def _apply_name_filter(self, matching):
+        """Filter *matching* long-names by the name-filter text.
+
+        Tokens are separated by ``|``.  A ``-`` prefix excludes matches.
+        Matching is case-insensitive substring on the short (leaf) name.
+        Returns the filtered set, or *matching* unchanged if the filter is empty.
+        """
+        raw = self.name_filter_edit.text().strip()
+        if not raw:
+            return matching
+        include = []
+        exclude = []
+        for token in raw.split("|"):
+            token = token.strip()
+            if not token:
+                continue
+            if token.startswith("-"):
+                name = token[1:].strip()
+                if name:
+                    exclude.append(name.lower())
+            else:
+                include.append(token.lower())
+
+        result = set()
+        for long_name in matching:
+            short = long_name.rsplit("|", 1)[-1].lower()
+            if include and not any(pat in short for pat in include):
+                continue
+            if any(pat in short for pat in exclude):
+                continue
+            result.add(long_name)
+        return result
 
     # ── Custom group persistence (JSON config) ────────────────────────────
 
@@ -960,6 +1010,7 @@ class SelectorTool(WorkspaceToolBase):
         if not isValid(self):
             return
         self._filter_timer.stop()
+        self._name_filter_timer.stop()
 
         prev_sel = set(cmds.ls(selection=True, long=True) or [])
 
@@ -974,6 +1025,7 @@ class SelectorTool(WorkspaceToolBase):
             if matching is None:
                 self.status_label.setText("Enter a type to filter")
                 return
+            matching = self._apply_name_filter(matching)
             if not matching:
                 self.status_label.setText("0 items")
                 return
